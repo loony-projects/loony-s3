@@ -1,0 +1,22 @@
+[package]
+name = "s3-object"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+s3-core = { path = "../core" }
+s3-metadata = { path = "../metadata" }
+s3-storage = { path = "../storage" }
+s3-erasure = { path = "../erasure" }
+sha2.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+bytes.workspace = true
+md-5.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
