@@ -14,7 +14,7 @@ s3-storage = { path = "../storage" }
 s3-auth = { path = "../auth" }
 axum.workspace = true
 tower.workspace = true
-tower-http = { workspace = true, features = ["request-id", "trace"] }
+tower-http = { workspace = true, features = ["request-id", "trace", "cors"] }
 http.workspace = true
 tokio.workspace = true
 futures.workspace = true

@@ -19,6 +19,7 @@ use axum::Router;
 use axum::routing::{get, put};
 use http::HeaderName;
 use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::request_id::{PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
@@ -60,6 +61,23 @@ pub fn build_router(state: AppState) -> Router {
                     state.clone(),
                     auth::sigv4_auth,
                 )),
+        )
+        // Outermost layer: a browser-based client (prompt §71's frontend) is served
+        // from a different origin than this API, so every request -- including the
+        // preflight OPTIONS a browser sends ahead of any request carrying the SigV4
+        // `authorization`/`x-amz-*` headers -- needs a CORS response. It has to wrap
+        // the auth layer above, not sit inside it: preflight requests carry no
+        // signature, so if `sigv4_auth` saw them first it would reject every one with
+        // 403 and no real request would ever get past the browser's CORS check.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .expose_headers([
+                    HeaderName::from_static("etag"),
+                    HeaderName::from_static("x-amz-request-id"),
+                ]),
         )
         .with_state(state)
 }
