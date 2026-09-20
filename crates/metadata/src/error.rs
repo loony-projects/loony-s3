@@ -21,6 +21,15 @@ pub enum MetaError {
     #[error("the list of parts was not in ascending order")]
     InvalidPartOrder,
 
+    #[error("node {0} is not registered in this cluster")]
+    NoSuchNode(String),
+
+    #[error(
+        "this node already belongs to cluster {existing:?} and cannot join/bootstrap cluster {requested:?} \
+         — refusing to silently merge unrelated clusters"
+    )]
+    ClusterIdMismatch { existing: String, requested: String },
+
     #[error("database error: {0}")]
     Db(String),
 

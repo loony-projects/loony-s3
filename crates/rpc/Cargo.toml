@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 s3-core = { path = "../core" }
 s3-storage = { path = "../storage" }
+s3-metadata = { path = "../metadata" }
 axum.workspace = true
 tokio.workspace = true
 reqwest.workspace = true

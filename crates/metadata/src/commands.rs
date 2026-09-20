@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use s3_core::{BucketId, BucketName, ETag, ObjectKey, OwnerId, PartManifest, UploadId};
+use s3_core::{BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId};
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone)]
@@ -74,6 +74,15 @@ pub struct CompleteMultipart {
     /// `InvalidPartOrder`).
     pub requested_parts: Vec<(u32, String)>,
     pub content_type: String,
+}
+
+/// Registers (or re-registers, bumping `generation`) a node in the cluster's registry
+/// (architecture.md §34).
+#[derive(Debug, Clone)]
+pub struct RegisterNode {
+    pub node_id: NodeId,
+    pub advertised_address: String,
+    pub failure_domain: Vec<String>,
 }
 
 /// A credential record (architecture.md §54). `secret_key` is stored as configured

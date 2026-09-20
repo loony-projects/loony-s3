@@ -17,6 +17,7 @@ s3-observability = { path = "../observability" }
 s3-metadata = { path = "../metadata" }
 s3-object = { path = "../object" }
 s3-api = { path = "../api" }
+s3-rpc = { path = "../rpc" }
 tokio.workspace = true
 clap.workspace = true
 dotenvy.workspace = true

@@ -15,15 +15,15 @@ use async_trait::async_trait;
 use md5::{Digest as _, Md5};
 use redb::{Database, ReadableTable, TableDefinition};
 use s3_core::{
-    Bucket, BucketId, BucketName, ETag, ObjectId, ObjectKey, ObjectManifest, OwnerId, PartManifest,
-    UploadId, VersionId, VersioningState,
+    Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectId,
+    ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState,
 };
 use sha2::Sha256;
 use time::OffsetDateTime;
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary,
+    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode,
 };
 use crate::error::MetaError;
 use crate::store::MetadataStore;
@@ -32,6 +32,9 @@ const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
 const OBJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("objects");
 const MULTIPART: TableDefinition<&str, &[u8]> = TableDefinition::new("multipart_uploads");
 const CREDENTIALS: TableDefinition<&str, &[u8]> = TableDefinition::new("credentials");
+const NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("nodes");
+const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
+const CLUSTER_ID_KEY: &str = "cluster_id";
 
 pub struct RedbMetadataStore {
     db: Arc<Database>,
@@ -64,6 +67,8 @@ impl RedbMetadataStore {
             write_txn.open_table(OBJECTS).map_err(db_err)?;
             write_txn.open_table(MULTIPART).map_err(db_err)?;
             write_txn.open_table(CREDENTIALS).map_err(db_err)?;
+            write_txn.open_table(NODES).map_err(db_err)?;
+            write_txn.open_table(CLUSTER).map_err(db_err)?;
             write_txn.commit().map_err(db_err)?;
             Ok(db)
         })
@@ -558,6 +563,122 @@ impl MetadataStore for RedbMetadataStore {
         })
         .await
     }
+
+    async fn bootstrap_cluster(&self, cluster_id: ClusterId) -> Result<(), MetaError> {
+        self.blocking(move |db| {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            {
+                let mut table = write_txn.open_table(CLUSTER).map_err(db_err)?;
+                let existing: Option<ClusterId> = match table.get(CLUSTER_ID_KEY).map_err(db_err)? {
+                    Some(guard) => Some(serde_json::from_slice(guard.value())?),
+                    None => None,
+                };
+                match existing {
+                    Some(existing) if existing != cluster_id => {
+                        return Err(MetaError::ClusterIdMismatch {
+                            existing: existing.to_string(),
+                            requested: cluster_id.to_string(),
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        let bytes = serde_json::to_vec(&cluster_id)?;
+                        table
+                            .insert(CLUSTER_ID_KEY, bytes.as_slice())
+                            .map_err(db_err)?;
+                    }
+                }
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn get_cluster_id(&self) -> Result<Option<ClusterId>, MetaError> {
+        self.blocking(move |db| {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = read_txn.open_table(CLUSTER).map_err(db_err)?;
+            match table.get(CLUSTER_ID_KEY).map_err(db_err)? {
+                Some(guard) => Ok(Some(serde_json::from_slice(guard.value())?)),
+                None => Ok(None),
+            }
+        })
+        .await
+    }
+
+    async fn register_node(&self, cmd: RegisterNode) -> Result<NodeInfo, MetaError> {
+        self.blocking(move |db| {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            let info = {
+                let mut table = write_txn.open_table(NODES).map_err(db_err)?;
+                let key = cmd.node_id.to_string();
+                let generation = match table.get(key.as_str()).map_err(db_err)? {
+                    Some(guard) => {
+                        let existing: NodeInfo = serde_json::from_slice(guard.value())?;
+                        existing.generation + 1
+                    }
+                    None => 0,
+                };
+                let info = NodeInfo {
+                    node_id: cmd.node_id,
+                    advertised_address: cmd.advertised_address,
+                    state: NodeState::Joining,
+                    generation,
+                    last_seen: OffsetDateTime::now_utc(),
+                    failure_domain: cmd.failure_domain,
+                };
+                let bytes = serde_json::to_vec(&info)?;
+                table
+                    .insert(key.as_str(), bytes.as_slice())
+                    .map_err(db_err)?;
+                info
+            };
+            write_txn.commit().map_err(db_err)?;
+            Ok(info)
+        })
+        .await
+    }
+
+    async fn update_node_state(&self, node_id: NodeId, state: NodeState) -> Result<(), MetaError> {
+        self.blocking(move |db| {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            {
+                let mut table = write_txn.open_table(NODES).map_err(db_err)?;
+                let key = node_id.to_string();
+                let mut info: NodeInfo = match table.get(key.as_str()).map_err(db_err)? {
+                    Some(guard) => serde_json::from_slice(guard.value())?,
+                    None => return Err(MetaError::NoSuchNode(key)),
+                };
+                info.state = state;
+                info.last_seen = OffsetDateTime::now_utc();
+                let bytes = serde_json::to_vec(&info)?;
+                table
+                    .insert(key.as_str(), bytes.as_slice())
+                    .map_err(db_err)?;
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn list_nodes(&self) -> Result<Vec<NodeInfo>, MetaError> {
+        self.blocking(move |db| {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = read_txn.open_table(NODES).map_err(db_err)?;
+            let mut result = Vec::new();
+            for entry in table.iter().map_err(db_err)? {
+                let (_key, value) = entry.map_err(db_err)?;
+                result.push(serde_json::from_slice(value.value())?);
+            }
+            result.sort_by(|a: &NodeInfo, b: &NodeInfo| {
+                a.node_id.to_string().cmp(&b.node_id.to_string())
+            });
+            Ok(result)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -999,5 +1120,96 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(fetched.bucket_id, bucket_id);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_cluster_is_idempotent_and_rejects_mismatched_ids() {
+        let store = store().await;
+        assert_eq!(store.get_cluster_id().await.unwrap(), None);
+
+        let id = s3_core::ClusterId::parse("cluster-one").unwrap();
+        store.bootstrap_cluster(id.clone()).await.unwrap();
+        assert_eq!(store.get_cluster_id().await.unwrap(), Some(id.clone()));
+
+        // Calling it again with the same id is a no-op, not an error.
+        store.bootstrap_cluster(id.clone()).await.unwrap();
+
+        let other = s3_core::ClusterId::parse("cluster-two").unwrap();
+        let err = store.bootstrap_cluster(other).await.unwrap_err();
+        assert!(matches!(err, MetaError::ClusterIdMismatch { .. }));
+        // The mismatch attempt didn't change anything.
+        assert_eq!(store.get_cluster_id().await.unwrap(), Some(id));
+    }
+
+    #[tokio::test]
+    async fn register_node_bumps_generation_on_rejoin() {
+        let store = store().await;
+        let node_id = s3_core::NodeId::new();
+
+        let first = store
+            .register_node(RegisterNode {
+                node_id,
+                advertised_address: "node-a:9100".into(),
+                failure_domain: vec!["rack:a".into()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(first.generation, 0);
+        assert_eq!(first.state, s3_core::NodeState::Joining);
+
+        let second = store
+            .register_node(RegisterNode {
+                node_id,
+                advertised_address: "node-a:9100".into(),
+                failure_domain: vec!["rack:a".into()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(second.generation, 1);
+    }
+
+    #[tokio::test]
+    async fn update_node_state_requires_prior_registration() {
+        let store = store().await;
+        let node_id = s3_core::NodeId::new();
+
+        let err = store
+            .update_node_state(node_id, s3_core::NodeState::Healthy)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MetaError::NoSuchNode(_)));
+
+        store
+            .register_node(RegisterNode {
+                node_id,
+                advertised_address: "node-a:9100".into(),
+                failure_domain: vec![],
+            })
+            .await
+            .unwrap();
+        store
+            .update_node_state(node_id, s3_core::NodeState::Healthy)
+            .await
+            .unwrap();
+
+        let nodes = store.list_nodes().await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].state, s3_core::NodeState::Healthy);
+    }
+
+    #[tokio::test]
+    async fn list_nodes_returns_every_registered_node() {
+        let store = store().await;
+        for i in 0..3 {
+            store
+                .register_node(RegisterNode {
+                    node_id: s3_core::NodeId::new(),
+                    advertised_address: format!("node-{i}:9100"),
+                    failure_domain: vec![],
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.list_nodes().await.unwrap().len(), 3);
     }
 }

@@ -4,11 +4,14 @@
 //! land; this phase covers what Phase 3 (Standalone S3) needs.
 
 use async_trait::async_trait;
-use s3_core::{Bucket, BucketId, BucketName, ObjectKey, ObjectManifest, OwnerId, UploadId};
+use s3_core::{
+    Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectKey,
+    ObjectManifest, OwnerId, UploadId,
+};
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    PartSummary,
+    PartSummary, RegisterNode,
 };
 use crate::error::MetaError;
 use s3_core::PartManifest;
@@ -43,4 +46,17 @@ pub trait MetadataStore: Send + Sync {
 
     async fn put_credential(&self, cred: Credential) -> Result<(), MetaError>;
     async fn get_credential(&self, access_key: &str) -> Result<Option<Credential>, MetaError>;
+
+    /// Sets this store's cluster identity if it doesn't have one yet; idempotent (and
+    /// safe to call again with the same id) once it does. Errors with
+    /// [`MetaError::ClusterIdMismatch`] rather than silently adopting a different
+    /// cluster (architecture.md §36).
+    async fn bootstrap_cluster(&self, cluster_id: ClusterId) -> Result<(), MetaError>;
+    async fn get_cluster_id(&self) -> Result<Option<ClusterId>, MetaError>;
+
+    /// Registers `node_id`, bumping `generation` if it was already registered
+    /// (architecture.md §34).
+    async fn register_node(&self, cmd: RegisterNode) -> Result<NodeInfo, MetaError>;
+    async fn update_node_state(&self, node_id: NodeId, state: NodeState) -> Result<(), MetaError>;
+    async fn list_nodes(&self) -> Result<Vec<NodeInfo>, MetaError>;
 }

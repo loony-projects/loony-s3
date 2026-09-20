@@ -1608,10 +1608,15 @@ dependencies = [
 name = "s3-cluster"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "reqwest",
  "s3-core",
+ "s3-metadata",
+ "s3-rpc",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1700,6 +1705,7 @@ dependencies = [
  "futures",
  "reqwest",
  "s3-core",
+ "s3-metadata",
  "s3-storage",
  "serde",
  "subtle",
@@ -1722,6 +1728,7 @@ dependencies = [
  "s3-metadata",
  "s3-object",
  "s3-observability",
+ "s3-rpc",
  "s3-storage",
  "sha2",
  "thiserror 2.0.20",

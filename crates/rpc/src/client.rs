@@ -9,8 +9,108 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use s3_core::{NodeId, ShardId, ShardReceipt, ShardStat, ShardTarget};
+use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardStat, ShardTarget};
 use s3_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
+
+use crate::types::{HealthInfo, JoinRequest, JoinResponse};
+
+/// Errors from the cluster-protocol calls (`join_cluster`/`fetch_members`/
+/// `fetch_health`), which -- unlike shard I/O -- aren't naturally `StorageError`s: they
+/// happen before a node is even registered, let alone resolvable as a `ShardStore`
+/// target.
+#[derive(Debug, thiserror::Error)]
+pub enum RpcClientError {
+    #[error("unreachable: {0}")]
+    Unreachable(String),
+    #[error("remote returned HTTP {status}: {body}")]
+    Remote { status: u16, body: String },
+}
+
+/// Asks `seed_base_url` to admit this node into its cluster, returning the cluster id
+/// (which the caller should persist locally, architecture.md §36) and the current
+/// member list.
+pub async fn join_cluster(
+    http: &reqwest::Client,
+    seed_base_url: &str,
+    token: &str,
+    request: &JoinRequest,
+) -> Result<JoinResponse, RpcClientError> {
+    post_json(
+        http,
+        &format!("{seed_base_url}/internal/v1/cluster/join"),
+        token,
+        request,
+    )
+    .await
+}
+
+pub async fn fetch_members(
+    http: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<NodeInfo>, RpcClientError> {
+    get_json(
+        http,
+        &format!("{base_url}/internal/v1/cluster/members"),
+        token,
+    )
+    .await
+}
+
+pub async fn fetch_health(
+    http: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> Result<HealthInfo, RpcClientError> {
+    get_json(http, &format!("{base_url}/internal/v1/health"), token).await
+}
+
+async fn get_json<T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> Result<T, RpcClientError> {
+    let resp = http
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| RpcClientError::Unreachable(e.to_string()))?;
+    parse_json_response(resp).await
+}
+
+async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+    body: &B,
+) -> Result<T, RpcClientError> {
+    let resp = http
+        .post(url)
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| RpcClientError::Unreachable(e.to_string()))?;
+    parse_json_response(resp).await
+}
+
+async fn parse_json_response<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+) -> Result<T, RpcClientError> {
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(RpcClientError::Remote {
+            status: status.as_u16(),
+            body,
+        });
+    }
+    resp.json::<T>().await.map_err(|e| RpcClientError::Remote {
+        status: status.as_u16(),
+        body: e.to_string(),
+    })
+}
 
 /// Maps a node's persistent identity to the base URL of its internal RPC server.
 /// Phase 6 scope: nothing here yet tracks cluster membership dynamically (that's

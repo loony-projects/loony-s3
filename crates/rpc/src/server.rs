@@ -1,8 +1,10 @@
-//! The internal RPC server: exposes one node's local [`ShardStore`] to other nodes over
-//! HTTP (architecture.md §40). Mounted on a separate port from the public S3 API
-//! (`S3_CLUSTER_ADDR`, not `S3_BIND_ADDR`) — S3 clients never see these routes, and
-//! nothing here is reachable without the shared bearer token (mTLS replaces this once
-//! cluster bootstrap exists to mint a CA, see the crate-level docs).
+//! The internal RPC server: exposes one node's local [`ShardStore`] (PutShard/GetShard/
+//! StatShard/DeleteShard) and cluster membership operations (Health/ClusterJoin/
+//! ClusterMembers) to other nodes over HTTP (architecture.md §40). Mounted on a
+//! separate port from the public S3 API (`S3_CLUSTER_ADDR`, not `S3_BIND_ADDR`) — S3
+//! clients never see these routes, and nothing here is reachable without the shared
+//! bearer token (mTLS replaces this once cluster bootstrap exists to mint a CA, see the
+//! crate-level docs).
 
 use std::sync::Arc;
 
@@ -13,18 +15,20 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use futures::StreamExt;
-use serde::Serialize;
 use subtle::ConstantTimeEq;
 
-use s3_core::{NodeId, ShardId, ShardReceipt, ShardTarget, VolumeId};
+use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardTarget, VolumeId};
+use s3_metadata::{MetadataStore, RegisterNode};
 use s3_storage::{ShardBytesIn, ShardStore};
 
 use crate::PROTOCOL_VERSION;
 use crate::error::RpcServerError;
+use crate::types::{HealthInfo, JoinRequest, JoinResponse};
 
 #[derive(Clone)]
 pub struct RpcServerState {
     pub shard_store: Arc<dyn ShardStore>,
+    pub metadata: Arc<dyn MetadataStore>,
     pub local_node: NodeId,
     /// Shared cluster token, checked in constant time (prompt §52/§83: "signature
     /// timing attacks" — the same discipline applies to any bearer credential).
@@ -34,6 +38,8 @@ pub struct RpcServerState {
 pub fn build_router(state: RpcServerState) -> Router {
     Router::new()
         .route("/internal/v1/health", get(health))
+        .route("/internal/v1/cluster/join", axum::routing::post(join))
+        .route("/internal/v1/cluster/members", get(members))
         .route("/internal/v1/volumes/:volume_id/shards", put(put_shard))
         .route(
             "/internal/v1/volumes/:volume_id/shards/:shard_id",
@@ -57,23 +63,67 @@ fn check_token(headers: &HeaderMap, expected: &str) -> Result<(), RpcServerError
     }
 }
 
-#[derive(Serialize)]
-struct HealthResponse {
-    node_id: NodeId,
-    protocol_version: u32,
-    status: &'static str,
-}
-
 async fn health(
     State(state): State<RpcServerState>,
     headers: HeaderMap,
-) -> Result<Json<HealthResponse>, RpcServerError> {
+) -> Result<Json<HealthInfo>, RpcServerError> {
     check_token(&headers, &state.token)?;
-    Ok(Json(HealthResponse {
+    Ok(Json(HealthInfo {
         node_id: state.local_node,
         protocol_version: PROTOCOL_VERSION,
-        status: "healthy",
+        status: "healthy".to_string(),
     }))
+}
+
+/// Handles a peer's join request: validates the claimed cluster id (if any) against
+/// this node's own (architecture.md §36 — never silently merge unrelated clusters),
+/// registers the joiner in the local node registry, and hands back the current member
+/// list so the joiner starts with a real view instead of an empty one.
+async fn join(
+    State(state): State<RpcServerState>,
+    headers: HeaderMap,
+    Json(req): Json<JoinRequest>,
+) -> Result<Json<JoinResponse>, RpcServerError> {
+    check_token(&headers, &state.token)?;
+
+    let cluster_id = state
+        .metadata
+        .get_cluster_id()
+        .await?
+        .ok_or(RpcServerError::NotBootstrapped)?;
+
+    if let Some(claimed) = &req.claimed_cluster_id
+        && claimed != cluster_id.as_str()
+    {
+        return Err(s3_metadata::MetaError::ClusterIdMismatch {
+            existing: cluster_id.to_string(),
+            requested: claimed.clone(),
+        }
+        .into());
+    }
+
+    state
+        .metadata
+        .register_node(RegisterNode {
+            node_id: req.node_id,
+            advertised_address: req.advertised_address,
+            failure_domain: req.failure_domain,
+        })
+        .await?;
+
+    let members = state.metadata.list_nodes().await?;
+    Ok(Json(JoinResponse {
+        cluster_id: cluster_id.to_string(),
+        members,
+    }))
+}
+
+async fn members(
+    State(state): State<RpcServerState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<NodeInfo>>, RpcServerError> {
+    check_token(&headers, &state.token)?;
+    Ok(Json(state.metadata.list_nodes().await?))
 }
 
 async fn put_shard(

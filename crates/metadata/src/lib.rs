@@ -19,7 +19,7 @@ mod store;
 
 pub use commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary,
+    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode,
 };
 pub use error::MetaError;
 pub use redb_store::RedbMetadataStore;
