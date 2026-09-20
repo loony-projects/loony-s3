@@ -1,0 +1,8 @@
+dist/
+node_modules/
+target/
+
+# Environment files with real values — use .env.example for templates
+.env
+.env.local
+.env.*.local

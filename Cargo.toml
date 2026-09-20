@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/metadata",
+    "crates/placement",
+    "crates/erasure",
+    "crates/storage",
+    "crates/rpc",
+    "crates/cluster",
+    "crates/object",
+    "crates/auth",
+    "crates/api",
+    "crates/healing",
+    "crates/admin",
+    "crates/admin-cli",
+    "crates/observability",
+    "crates/server",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7" }
+hyper = { version = "1" }
+tower = { version = "0.5" }
+tower-http = { version = "0.6" }
+serde = { version = "1", features = ["derive"] }
+bytes = "1"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2"
+quick-xml = { version = "0.36", features = ["serialize"] }
+async-trait = "0.1"
+http = "1"
+serde_json = "1"
+tokio-util = { version = "0.7", features = ["io"] }
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+tempfile = "3"
+redb = "2"
+md-5 = "0.10"
+base64 = "0.22"
+reed-solomon-simd = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
