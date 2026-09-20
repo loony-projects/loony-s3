@@ -4,3 +4,20 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+s3-core = { path = "../core" }
+s3-storage = { path = "../storage" }
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+bytes.workspace = true
+async-trait.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

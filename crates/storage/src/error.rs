@@ -35,4 +35,10 @@ pub enum StorageError {
         target: ShardTarget,
         local_node: NodeId,
     },
+
+    #[error("remote node {0} is unreachable: {1}")]
+    Unreachable(NodeId, String),
+
+    #[error("remote node {0} returned an unexpected response: {1}")]
+    Remote(NodeId, String),
 }

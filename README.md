@@ -4,18 +4,27 @@ A production-oriented, S3-compatible object storage system in Rust that runs as 
 single-process standalone server or as a multi-node fault-tolerant cluster from the same
 codebase.
 
-**Status: Phases 1-5 complete (standalone mode).** Config/logging/metrics/node identity
-(Phase 1), a redb-backed metadata state machine (Phase 2), the real S3 API over a real
-HTTP server — CreateBucket/DeleteBucket/HeadBucket/ListBuckets/PutObject/GetObject/
-HeadObject/DeleteObject/ListObjectsV2 (Phase 3), SigV4 authentication (header +
-presigned URLs) with ownership-based authorization (Phase 4), and real Reed-Solomon
-erasure coding with small-object replication, streaming stripe encode/decode across
-multiple local volumes, and checksum-verified degraded reads (Phase 5) are all
-implemented, tested, and verified against the real AWS CLI (including corrupting a
-shard's bytes on disk and confirming GET still returns byte-perfect data via
-reconstruction). Cluster mode (Raft, internal RPC, membership, multi-node placement,
-healing) is not wired yet — that's Phases 6-9+. Multipart upload and Range requests are
-also not implemented yet (separate, later-scoped phases). Read
+**Status: Phases 1-6 complete (standalone mode + internal RPC transport).**
+Config/logging/metrics/node identity (Phase 1), a redb-backed metadata state machine
+(Phase 2), the real S3 API over a real HTTP server —
+CreateBucket/DeleteBucket/HeadBucket/ListBuckets/PutObject/GetObject/HeadObject/
+DeleteObject/ListObjectsV2 (Phase 3), SigV4 authentication (header + presigned URLs)
+with ownership-based authorization (Phase 4), real Reed-Solomon erasure coding with
+small-object replication, streaming stripe encode/decode across multiple local
+volumes, and checksum-verified degraded reads (Phase 5), and a node-to-node internal
+RPC transport — PutShard/GetShard/StatShard/DeleteShard/Health over HTTP, bearer-token
+authenticated, tested across two independent real TCP listeners (Phase 6) — are all
+implemented and tested. Phase 3-5 work is additionally verified against the real AWS
+CLI (including corrupting a shard's bytes on disk and confirming GET still returns
+byte-perfect data via reconstruction).
+
+Cluster mode itself isn't wired into the `s3-server` binary yet: `s3-rpc`'s
+`RemoteShardStore` is a working, tested `ShardStore` implementation, but nothing yet
+resolves `node_id -> address` dynamically (that's `s3-cluster`'s job, Phase 7's
+membership/bootstrap/join work) or authenticates peers with mTLS (the bearer token is
+an explicitly-scoped dev-mode stand-in until Phase 7's cluster bootstrap can mint a CA
+to issue real certs from). Multipart upload and Range requests are also not
+implemented yet (separate, later-scoped phases). Read
 [`docs/architecture.md`](docs/architecture.md) before writing or reviewing any code in
 `crates/` — it is the design baseline every phase must stay consistent with.
 
@@ -38,7 +47,7 @@ See `docs/architecture.md` §3 for the full crate-dependency diagram. Short vers
 - `placement` — rendezvous-hashing shard placement
 - `erasure` — Reed-Solomon streaming stripe codec (`reed-solomon-simd`)
 - `storage` — local + remote (RPC) shard I/O
-- `rpc` — internal mTLS node-to-node protocol
+- `rpc` — internal node-to-node protocol (HTTP + bearer token today, mTLS from Phase 7)
 - `cluster` — membership, heartbeats, bootstrap/join
 - `object` — Bucket/Object/Multipart/Versioning domain services
 - `auth` — SigV4 + presigned URLs
