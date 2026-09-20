@@ -6,3 +6,165 @@ target/
 .env
 .env.local
 .env.*.local
+
+# --- Rust (auto-detected) ---
+# Detected via: Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust ---
+
+# --- Rust (crates/admin/) (auto-detected) ---
+# Detected via: crates/admin/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/admin/) ---
+
+# --- Rust (crates/admin-cli/) (auto-detected) ---
+# Detected via: crates/admin-cli/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/admin-cli/) ---
+
+# --- Rust (crates/api/) (auto-detected) ---
+# Detected via: crates/api/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/api/) ---
+
+# --- Rust (crates/auth/) (auto-detected) ---
+# Detected via: crates/auth/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/auth/) ---
+
+# --- Rust (crates/cluster/) (auto-detected) ---
+# Detected via: crates/cluster/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/cluster/) ---
+
+# --- Rust (crates/core/) (auto-detected) ---
+# Detected via: crates/core/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/core/) ---
+
+# --- Rust (crates/erasure/) (auto-detected) ---
+# Detected via: crates/erasure/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/erasure/) ---
+
+# --- Rust (crates/healing/) (auto-detected) ---
+# Detected via: crates/healing/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/healing/) ---
+
+# --- Rust (crates/metadata/) (auto-detected) ---
+# Detected via: crates/metadata/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/metadata/) ---
+
+# --- Rust (crates/object/) (auto-detected) ---
+# Detected via: crates/object/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/object/) ---
+
+# --- Rust (crates/observability/) (auto-detected) ---
+# Detected via: crates/observability/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/observability/) ---
+
+# --- Rust (crates/placement/) (auto-detected) ---
+# Detected via: crates/placement/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/placement/) ---
+
+# --- Rust (crates/rpc/) (auto-detected) ---
+# Detected via: crates/rpc/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/rpc/) ---
+
+# --- Rust (crates/server/) (auto-detected) ---
+# Detected via: crates/server/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/server/) ---
+
+# --- Rust (crates/storage/) (auto-detected) ---
+# Detected via: crates/storage/Cargo.toml
+target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+# --- end Rust (crates/storage/) ---
+
+# --- React (frontend/) (auto-detected) ---
+# Detected via: frontend/package.json
+node_modules/
+build/
+dist/
+.cache/
+.eslintcache
+.parcel-cache/
+storybook-static/
+coverage/
+.env
+.env.local
+.env.*.local
+# --- end React (frontend/) ---
+
+# --- OS (auto-detected) ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+# --- end OS ---
+
+# --- Editor (auto-detected) ---
+# Optional — many teams intentionally commit shared .vscode/launch.json or
+# .idea/ run configurations. Uncomment the lines below only if this project
+# does NOT want editor config tracked.
+# .vscode/
+# .idea/
+# --- end Editor ---
