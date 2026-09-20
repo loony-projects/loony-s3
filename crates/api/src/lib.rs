@@ -1,0 +1,65 @@
+//! Thin Axum HTTP layer: S3 REST routes, XML (de)serialization, S3 error-code mapping.
+//! Delegates all business logic to `s3-object` (architecture.md §1) — handlers here do
+//! request parsing and response shaping only.
+//!
+//! Phase 3/4 scope (prompt's own phase boundaries): CreateBucket, DeleteBucket,
+//! HeadBucket, ListBuckets, PutObject, GetObject, HeadObject, DeleteObject,
+//! ListObjectsV2, all behind SigV4 (header + presigned) authentication and
+//! ownership-based authorization. No multipart yet, no Range requests yet, no
+//! versioning query params yet — each is a later, separately-scoped phase.
+
+mod auth;
+mod error;
+mod handlers;
+mod http_date;
+mod state;
+mod xml;
+
+use axum::Router;
+use axum::routing::{get, put};
+use http::HeaderName;
+use tower::ServiceBuilder;
+use tower_http::request_id::{PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::trace::TraceLayer;
+
+use s3_observability::UuidV7RequestId;
+
+pub use state::AppState;
+
+pub fn build_router(state: AppState) -> Router {
+    let request_id_header = HeaderName::from_static("x-amz-request-id");
+
+    Router::new()
+        .route("/", get(handlers::bucket::list_buckets))
+        .route(
+            "/:bucket",
+            put(handlers::bucket::create_bucket)
+                .delete(handlers::bucket::delete_bucket)
+                .head(handlers::bucket::head_bucket)
+                .get(handlers::bucket::list_objects_v2),
+        )
+        .route(
+            "/:bucket/*key",
+            put(handlers::object::put_object)
+                .get(handlers::object::get_object)
+                .head(handlers::object::head_object)
+                .delete(handlers::object::delete_object),
+        )
+        .layer(
+            ServiceBuilder::new()
+                .layer(SetRequestIdLayer::new(
+                    request_id_header.clone(),
+                    UuidV7RequestId,
+                ))
+                .layer(PropagateRequestIdLayer::new(request_id_header))
+                .layer(TraceLayer::new_for_http())
+                // Runs last, i.e. closest to the handlers: every route above requires a
+                // valid SigV4 signature (prompt §52-53) before a handler ever sees the
+                // request.
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::sigv4_auth,
+                )),
+        )
+        .with_state(state)
+}

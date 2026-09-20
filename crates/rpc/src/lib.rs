@@ -1,0 +1,1 @@
+//! Internal node-to-node protocol: framing, mTLS transport, and protocol version negotiation for PutShard/GetShard/DeleteShard/StatShard/Health/ClusterJoin/healing RPCs. Never exposed to S3 clients. See docs/architecture.md sections 17-18 and 24.

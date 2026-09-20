@@ -1,0 +1,1 @@
+//! PlacementEngine trait and the rendezvous-hashing (HRW) implementation used to choose (node_id, volume_id) targets for a stripe, honoring failure-domain spread constraints. Pure computation, no I/O. See docs/architecture.md section 10.

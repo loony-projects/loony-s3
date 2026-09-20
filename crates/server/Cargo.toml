@@ -1,0 +1,27 @@
+[package]
+name = "s3-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "s3-server"
+path = "src/main.rs"
+
+[dependencies]
+s3-core = { path = "../core" }
+s3-cluster = { path = "../cluster" }
+s3-storage = { path = "../storage" }
+s3-observability = { path = "../observability" }
+s3-metadata = { path = "../metadata" }
+s3-object = { path = "../object" }
+s3-api = { path = "../api" }
+tokio.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+axum.workspace = true
+sha2.workspace = true
+time.workspace = true
