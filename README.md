@@ -42,7 +42,12 @@ single-authority node registry hasn't yet been rewired to actually call
 metadata is **still not** shared across cluster nodes — that wiring, plus distributed
 PUT/GET, is Phase 9. Internal RPC auth is still a bearer token, not the mTLS the
 architecture doc commits to for production. Multipart upload and Range requests also
-remain unimplemented (separate, later-scoped phases). Read
+remain unimplemented (separate, later-scoped phases).
+
+**Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (AWS
+CLI, boto3, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env
+var/flag; [`docs/api-reference.md`](docs/api-reference.md) for the exact S3 API surface;
+[`docs/cluster.md`](docs/cluster.md) for running more than one node. Read
 [`docs/architecture.md`](docs/architecture.md) before writing or reviewing any code in
 `crates/` — it is the design baseline every phase must stay consistent with.
 
