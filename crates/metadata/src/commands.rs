@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use s3_core::{BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId};
+use s3_core::{
+    BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId, VolumeId,
+};
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -83,6 +85,7 @@ pub struct RegisterNode {
     pub node_id: NodeId,
     pub advertised_address: String,
     pub failure_domain: Vec<String>,
+    pub volumes: Vec<VolumeId>,
 }
 
 /// A credential record (architecture.md §54). `secret_key` is stored as configured

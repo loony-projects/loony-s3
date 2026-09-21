@@ -70,6 +70,24 @@ distributed right now:
   every replica's `apply()` is now a pure function of the command, as a replicated state
   machine requires.
 
+- **Shard bytes now genuinely spread across nodes and are fetchable through any of
+  them (Phase 9).** `ObjectService` places each stripe's shards with `s3-placement`, a
+  rendezvous-hashing (HRW) engine following architecture.md §10: every candidate
+  `(node, volume)` pair across all `Healthy` cluster members is scored from a hash of
+  the stripe's identity and the candidate, and the top-scoring distinct nodes are
+  chosen (falling back to co-location on the same node only when there aren't enough
+  distinct ones — a deliberate simplification, see the module doc comment in
+  `crates/placement/src/lib.rs`, kept so standalone mode's existing
+  multiple-local-volumes erasure coding still works). A new `ClusterShardStore`
+  (`crates/rpc/src/cluster_shard_store.rs`) then routes every shard PUT/GET/STAT/DELETE
+  to local disk or, over the existing internal RPC transport (`RemoteShardStore`,
+  Phase 6), to whichever node actually holds it — resolved via a `CachedNodeResolver`
+  that refreshes from `MetadataStore::list_nodes()` every 5 seconds. Verified against
+  two real, separate `s3-server` processes with the AWS CLI: a multi-megabyte PUT
+  issued against node 1 leaves shard files on *both* nodes' local disks, and `GET` of
+  that object issued against *either* node returns byte-identical data (checked with
+  `sha256sum` against the source file in both directions).
+
 **What's still not wired up:** a joining node becomes a **learner**, never
 automatically a **voter** — matching architecture.md §5's documented design (a small,
 explicit voter set; everything else is a learner at most). There's no promotion path
@@ -77,15 +95,15 @@ yet (no `change_membership` call anywhere), so a single-voter group's leader can
 fail over to a second node today — if the bootstrap node goes down, the cluster's
 metadata group has no live voter left, even though a learner might have a fully
 caught-up copy of the data. Multi-voter failover is real future work, not a background
-task in progress.
+task in progress. A practical consequence today: writes (`Raft::client_write`) only
+succeed when issued against whichever node currently holds leadership — a non-leader
+node returns an error rather than forwarding the request to the leader, so clients
+doing writes need to know (or discover) which node that is. Reads and already-placed
+shard fetches work against any node.
 
-Separately, and this is the actual next phase (Phase 9, "Distributed PUT/GET"): shard
-*bytes* are still not fetchable across nodes. Metadata replication means node 2 now
-correctly answers `HeadObject`/`ListObjectsV2` for an object node 1 wrote, but a `GET`
-of that object's bytes through node 2 fails, because the object's shards physically
-live on node 1's local disk and there's no remote-shard-fetch path in `ObjectService`
-yet. Placement, remote shard writes, and distributed/degraded GET are what Phase 9
-adds.
+PUT still requires every planned shard write to succeed — there's no partial
+write-quorum/abort behavior from architecture.md §11, and no degraded-write
+healing-job enqueueing from §12-14; both remain future work.
 
 Internal RPC authentication is a shared bearer token (`S3_CLUSTER_TOKEN`), checked in
 constant time — not the mutual TLS the architecture doc commits to for a production

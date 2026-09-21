@@ -540,6 +540,7 @@ pub(crate) fn register_node(db: &Database, cmd: RegisterNode) -> Result<NodeInfo
             generation,
             last_seen: OffsetDateTime::now_utc(),
             failure_domain: cmd.failure_domain,
+            volumes: cmd.volumes,
         };
         let bytes = serde_json::to_vec(&info)?;
         table.insert(key.as_str(), bytes.as_slice()).map_err(db_err)?;

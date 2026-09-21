@@ -10,6 +10,7 @@ s3-core = { path = "../core" }
 s3-metadata = { path = "../metadata" }
 s3-storage = { path = "../storage" }
 s3-erasure = { path = "../erasure" }
+s3-placement = { path = "../placement" }
 sha2.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

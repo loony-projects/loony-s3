@@ -19,7 +19,7 @@ use subtle::ConstantTimeEq;
 
 use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardTarget, VolumeId};
-use s3_metadata::{MetadataStore, RegisterNode, Raft};
+use s3_metadata::{MetadataStore, Raft, RegisterNode};
 use s3_storage::{ShardBytesIn, ShardStore};
 
 use crate::PROTOCOL_VERSION;
@@ -53,7 +53,10 @@ pub fn build_router(state: RpcServerState) -> Router {
         )
         .route("/internal/v1/raft/append", axum::routing::post(raft_append))
         .route("/internal/v1/raft/vote", axum::routing::post(raft_vote))
-        .route("/internal/v1/raft/snapshot", axum::routing::post(raft_snapshot))
+        .route(
+            "/internal/v1/raft/snapshot",
+            axum::routing::post(raft_snapshot),
+        )
         .with_state(state)
 }
 
@@ -127,14 +130,17 @@ async fn join(
 
     if let Some(raft) = &state.raft {
         let node = openraft::BasicNode::new(req.advertised_address.clone());
-        tokio::time::timeout(ADD_LEARNER_TIMEOUT, raft.add_learner(req.node_id, node, true))
-            .await
-            .map_err(|_| {
-                RpcServerError::RaftMembershipChange(
-                    "timed out waiting for the new learner to catch up".into(),
-                )
-            })?
-            .map_err(|e| RpcServerError::RaftMembershipChange(e.to_string()))?;
+        tokio::time::timeout(
+            ADD_LEARNER_TIMEOUT,
+            raft.add_learner(req.node_id, node, true),
+        )
+        .await
+        .map_err(|_| {
+            RpcServerError::RaftMembershipChange(
+                "timed out waiting for the new learner to catch up".into(),
+            )
+        })?
+        .map_err(|e| RpcServerError::RaftMembershipChange(e.to_string()))?;
     }
 
     state
@@ -143,6 +149,7 @@ async fn join(
             node_id: req.node_id,
             advertised_address: req.advertised_address,
             failure_domain: req.failure_domain,
+            volumes: req.volumes,
         })
         .await?;
 

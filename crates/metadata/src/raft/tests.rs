@@ -77,6 +77,7 @@ async fn cluster_bootstrap_and_node_registry_round_trip_through_raft() {
             node_id,
             advertised_address: "self:9100".into(),
             failure_domain: vec![],
+            volumes: vec![],
         })
         .await
         .unwrap();

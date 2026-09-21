@@ -58,7 +58,11 @@ async fn spawn_node() -> Node {
         let _ = axum::serve(listener, router).await;
     });
 
-    Node { node_id, addr, store }
+    Node {
+        node_id,
+        addr,
+        store,
+    }
 }
 
 async fn bucket_exists(store: &RaftMetadataStore, name: &str) -> bool {
@@ -75,7 +79,10 @@ async fn a_node_joined_via_the_real_join_rpc_replicates_existing_and_future_buck
     // the sole voter over itself.
     let node1 = spawn_node().await;
     let mut members = std::collections::BTreeMap::new();
-    members.insert(node1.node_id, openraft::BasicNode::new(node1.addr.to_string()));
+    members.insert(
+        node1.node_id,
+        openraft::BasicNode::new(node1.addr.to_string()),
+    );
     node1.store.raft().initialize(members).await.unwrap();
     node1
         .store
@@ -134,6 +141,7 @@ async fn a_node_joined_via_the_real_join_rpc_replicates_existing_and_future_buck
             advertised_address: node2.addr.to_string(),
             failure_domain: vec![],
             claimed_cluster_id: None,
+            volumes: vec![],
         },
     )
     .await
@@ -211,10 +219,20 @@ async fn a_node_joined_via_the_real_join_rpc_replicates_existing_and_future_buck
     // write -- should also show both nodes from either side.
     let nodes_from_1 = node1.store.list_nodes().await.unwrap();
     let nodes_from_2 = node2.store.list_nodes().await.unwrap();
-    assert_eq!(nodes_from_1.len(), 1, "node 1's own RegisterNode call in main.rs isn't exercised by this test's spawn_node helper");
     assert_eq!(
-        nodes_from_2.iter().map(|n| n.node_id).collect::<std::collections::HashSet<_>>(),
-        nodes_from_1.iter().map(|n| n.node_id).collect::<std::collections::HashSet<_>>(),
+        nodes_from_1.len(),
+        1,
+        "node 1's own RegisterNode call in main.rs isn't exercised by this test's spawn_node helper"
+    );
+    assert_eq!(
+        nodes_from_2
+            .iter()
+            .map(|n| n.node_id)
+            .collect::<std::collections::HashSet<_>>(),
+        nodes_from_1
+            .iter()
+            .map(|n| n.node_id)
+            .collect::<std::collections::HashSet<_>>(),
         "node registry should be identical from either node's local (replicated) view"
     );
 }
@@ -223,7 +241,10 @@ async fn a_node_joined_via_the_real_join_rpc_replicates_existing_and_future_buck
 async fn joining_with_a_mismatched_cluster_id_does_not_add_a_learner() {
     let node1 = spawn_node().await;
     let mut members = std::collections::BTreeMap::new();
-    members.insert(node1.node_id, openraft::BasicNode::new(node1.addr.to_string()));
+    members.insert(
+        node1.node_id,
+        openraft::BasicNode::new(node1.addr.to_string()),
+    );
     node1.store.raft().initialize(members).await.unwrap();
     node1
         .store
@@ -242,11 +263,15 @@ async fn joining_with_a_mismatched_cluster_id_does_not_add_a_learner() {
             advertised_address: node2.addr.to_string(),
             failure_domain: vec![],
             claimed_cluster_id: Some("wrong-cluster".into()),
+            volumes: vec![],
         },
     )
     .await
     .unwrap_err();
-    assert!(matches!(err, s3_rpc::RpcClientError::Remote { status: 409, .. }));
+    assert!(matches!(
+        err,
+        s3_rpc::RpcClientError::Remote { status: 409, .. }
+    ));
 
     // Rejected before add_learner ever ran: node 1's membership is still just itself.
     let metrics = node1.store.raft().metrics().borrow().clone();

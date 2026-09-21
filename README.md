@@ -4,7 +4,7 @@ A production-oriented, S3-compatible object storage system in Rust that runs as 
 single-process standalone server or as a multi-node fault-tolerant cluster from the same
 codebase.
 
-**Status: Phases 1-8 complete — metadata is now real Raft-backed consensus.**
+**Status: Phases 1-9 complete — distributed PUT/GET now really spans nodes.**
 Config/logging/metrics/node identity (Phase 1), a redb-backed metadata state machine
 (Phase 2), the real S3 API over a real HTTP server —
 CreateBucket/DeleteBucket/HeadBucket/ListBuckets/PutObject/GetObject/HeadObject/
@@ -46,18 +46,30 @@ real bug: `CreateBucket`/`BeginMultipart`/`CompleteMultipart` used to mint their
 a real divergence the moment a second one existed. IDs and timestamps are now resolved
 once, by whichever node proposes the command, and carried inside it.
 
+**Since Phase 8: distributed PUT/GET (Phase 9) is wired up.** `s3-object` now places
+each stripe's shards with a real rendezvous-hashing engine (`s3-placement`, §10)
+across every `Healthy` node's volumes, not just this node's own — preferring distinct
+nodes and falling back to co-location only when there aren't enough. A new
+`ClusterShardStore` (`crates/rpc`) dispatches each shard read/write to local disk or,
+via `RemoteShardStore` over the existing internal RPC transport, to whichever node
+actually holds it, resolved through a `CachedNodeResolver` that's refreshed from the
+(Raft-replicated) node registry every 5s. Verified against two genuinely separate
+`s3-server` processes with the real AWS CLI: a multi-megabyte PUT issued against node 1
+lands shards on both nodes' local disks, and a GET of that object issued against
+*either* node returns byte-identical data (`sha256sum` compared against the source
+file both ways).
+
 **What's still not there**: a learner is never automatically promoted to a voter (no
 `change_membership` call exists yet), so a single-voter group's leader still can't fail
 over to a second node — matching architecture.md §5's documented design (a small,
-explicit voter set) but meaning today's cluster mode has no real HA story yet. And
-separately — this is genuinely Phase 9's scope, not a gap in Phase 8's work — shard
-*bytes* still aren't fetchable across nodes: node 2 can correctly answer metadata
-queries about an object node 1 wrote, but `GetObject` on node 2 fails, because the
-shards physically live on node 1's disk and `ObjectService` has no remote-shard-fetch
-path yet. Placement, remote shard writes, and distributed/degraded GET are Phase 9.
-Internal RPC auth is still a bearer token, not the mTLS the architecture doc commits to
-for production. Multipart upload and Range requests also remain unimplemented
-(separate, later-scoped phases).
+explicit voter set) but meaning today's cluster mode has no real HA story yet, and, in
+practice, writes (which go through `Raft::client_write`) only succeed against whichever
+node is currently the metadata leader — a non-leader node returns an error rather than
+forwarding the request. PUT also still requires every planned shard write to succeed;
+there's no partial-write-quorum/abort semantics from architecture.md §11 and no
+degraded-write healing-job enqueueing from §12-14 yet. Internal RPC auth is still a
+bearer token, not the mTLS the architecture doc commits to for production. Multipart
+upload and Range requests also remain unimplemented (separate, later-scoped phases).
 
 **Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (AWS
 CLI, boto3, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env

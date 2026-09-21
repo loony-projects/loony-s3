@@ -175,25 +175,34 @@ async fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
 
-    if let Some(cluster_config) = &config.cluster
-        && let Err(code) = start_cluster_mode(
+    // Cluster mode's PUT/GET path needs a shard store that can reach *other* nodes'
+    // volumes, not just this one's own (Phase 9) -- `start_cluster_mode` builds and
+    // returns that wrapper; standalone mode has no cluster to reach, so it keeps using
+    // its local store directly, same as every phase before this one.
+    let object_shard_store = if let Some(cluster_config) = &config.cluster {
+        match start_cluster_mode(
             cluster_config,
             &identity,
             &config.data_dir,
             metadata.clone(),
             volumes.clone(),
+            volume_ids.clone(),
             cluster_token.unwrap(),
         )
         .await
-    {
-        return code;
-    }
+        {
+            Ok(store) => store,
+            Err(code) => return code,
+        }
+    } else {
+        volumes
+    };
 
     let state = AppState {
         buckets: Arc::new(BucketService::new(metadata.clone())),
         objects: Arc::new(ObjectService::new(
             metadata.clone(),
-            volumes,
+            object_shard_store,
             identity.node_id,
             volume_ids,
         )),
@@ -239,18 +248,22 @@ async fn main() -> std::process::ExitCode {
 /// server up first (nothing is replicating to it yet), but starting it first
 /// unconditionally keeps this function's shape the same for both paths.
 ///
-/// Returns `Err(exit_code)` on any failure that should stop startup.
+/// Returns the cluster-aware [`s3_rpc::ClusterShardStore`] `ObjectService` should use
+/// for PUT/GET placement -- distinct from `shard_store`, which stays purely local and
+/// is what this node serves to *other* nodes' shard requests -- or `Err(exit_code)` on
+/// any failure that should stop startup.
 async fn start_cluster_mode(
     cluster_config: &ClusterConfig,
     identity: &NodeIdentity,
     data_dir: &std::path::Path,
     metadata: Arc<RaftMetadataStore>,
     shard_store: Arc<dyn s3_storage::ShardStore>,
+    volume_ids: Vec<s3_core::VolumeId>,
     token: String,
-) -> Result<(), std::process::ExitCode> {
+) -> Result<Arc<dyn s3_storage::ShardStore>, std::process::ExitCode> {
     let raft = metadata.raft().clone();
     let rpc_state = s3_rpc::RpcServerState {
-        shard_store,
+        shard_store: shard_store.clone(),
         metadata: metadata.clone() as Arc<dyn MetadataStore>,
         local_node: identity.node_id,
         token: token.clone(),
@@ -297,6 +310,7 @@ async fn start_cluster_mode(
             identity.node_id,
             advertise_addr,
             Vec::new(),
+            volume_ids.clone(),
             token.clone(),
         )
         .await
@@ -334,6 +348,7 @@ async fn start_cluster_mode(
             identity.node_id,
             advertise_addr,
             Vec::new(),
+            volume_ids.clone(),
             claimed,
         )
         .await
@@ -360,7 +375,33 @@ async fn start_cluster_mode(
         std::time::Duration::from_secs(5),
     ));
 
-    Ok(())
+    let resolver = Arc::new(s3_rpc::CachedNodeResolver::new());
+    if let Ok(nodes) = metadata.list_nodes().await {
+        resolver.refresh(&nodes);
+    }
+    {
+        let resolver = resolver.clone();
+        let metadata = metadata.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                match metadata.list_nodes().await {
+                    Ok(nodes) => resolver.refresh(&nodes),
+                    Err(err) => tracing::warn!(%err, "failed to refresh node address cache"),
+                }
+            }
+        });
+    }
+
+    let cluster_shard_store = s3_rpc::ClusterShardStore::new(
+        identity.node_id,
+        shard_store,
+        resolver as Arc<dyn s3_rpc::NodeAddressResolver>,
+        token,
+    );
+
+    Ok(Arc::new(cluster_shard_store))
 }
 
 /// Dev-mode cluster token derivation (architecture.md §41's "simpler credentials"

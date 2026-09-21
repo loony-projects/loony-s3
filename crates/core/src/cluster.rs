@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::NodeId;
+use crate::ids::{NodeId, VolumeId};
 
 /// A validated cluster identifier — a human-chosen name (e.g. `cluster-production`,
 /// prompt §71), not a UUID, since operators name clusters and pass the name around in
@@ -92,9 +92,15 @@ pub struct NodeInfo {
     pub generation: u64,
     #[serde(with = "time::serde::rfc3339")]
     pub last_seen: OffsetDateTime,
-    /// Topology hints (`["rack:a", "zone:us-east-1a"]`-style) for future
-    /// failure-domain-aware placement (architecture.md §19); unused until Phase 9.
+    /// Topology hints (`["rack:a", "zone:us-east-1a"]`-style) for failure-domain-aware
+    /// placement (architecture.md §19) — the placement engine's node-diversity
+    /// preference (§10) is a simplified, node-only version of this; the full
+    /// hierarchy-aware constraint is later-scoped work.
     pub failure_domain: Vec<String>,
+    /// This node's local shard-storage volumes, as of its last registration/heartbeat —
+    /// the placement engine's candidate pool (architecture.md §10) is built from every
+    /// `HEALTHY` node's `volumes` list, not just the local node's own.
+    pub volumes: Vec<VolumeId>,
 }
 
 #[cfg(test)]

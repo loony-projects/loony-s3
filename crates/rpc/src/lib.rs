@@ -29,6 +29,7 @@
 //! (and therefore resolvable), most obviously during the join handshake itself.
 
 mod client;
+mod cluster_shard_store;
 mod error;
 mod raft_network;
 mod server;
@@ -40,6 +41,7 @@ pub use client::{
     NodeAddressResolver, RemoteShardStore, RpcClientError, StaticResolver, fetch_health,
     fetch_members, join_cluster,
 };
+pub use cluster_shard_store::{CachedNodeResolver, ClusterShardStore};
 pub use error::RpcServerError;
 pub use raft_network::HttpRaftNetworkFactory;
 pub use server::{RpcServerState, build_router};
@@ -243,6 +245,7 @@ mod tests {
                 advertised_address: "joiner.example:9100".into(),
                 failure_domain: vec!["rack:b".into()],
                 claimed_cluster_id: None,
+                volumes: vec![],
             },
         )
         .await
@@ -276,6 +279,7 @@ mod tests {
                 advertised_address: "joiner.example:9100".into(),
                 failure_domain: vec![],
                 claimed_cluster_id: Some("staging".into()),
+                volumes: vec![],
             },
         )
         .await
@@ -300,6 +304,7 @@ mod tests {
                 advertised_address: "joiner.example:9100".into(),
                 failure_domain: vec![],
                 claimed_cluster_id: None,
+                volumes: vec![],
             },
         )
         .await

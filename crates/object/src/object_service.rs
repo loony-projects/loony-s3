@@ -6,8 +6,8 @@ use futures::StreamExt;
 use futures::future::try_join_all;
 use md5::{Digest as _, Md5};
 use s3_core::{
-    Bucket, BucketName, DurabilityPolicy, ETag, NodeId, ObjectId, ObjectKey, ObjectManifest,
-    OwnerId, PartManifest, ShardLocation, ShardTarget, Stripe, VersionId, VolumeId,
+    Bucket, BucketName, DurabilityPolicy, ETag, NodeId, NodeState, ObjectId, ObjectKey,
+    ObjectManifest, OwnerId, PartManifest, ShardLocation, ShardTarget, Stripe, VersionId, VolumeId,
 };
 use s3_erasure::{ErasureCodec, RsErasureCodec};
 use s3_metadata::{ListObjectsPage, ListObjectsQuery, MetadataStore};
@@ -98,19 +98,32 @@ impl ObjectService {
         Ok(bucket)
     }
 
-    /// `count` distinct volumes (when there are at least that many) chosen by rotating
-    /// the start offset with `stripe_index`, so consecutive stripes of the same object
-    /// don't all land on the same subset of volumes.
-    fn select_volumes(&self, stripe_index: u32, count: usize) -> Result<Vec<VolumeId>, S3Error> {
-        if self.volumes.is_empty() {
-            return Err(S3Error::InvalidArgument(
-                "no local volumes are available".into(),
-            ));
+    /// Cluster-wide placement candidates (architecture.md §10): this node's own local
+    /// volumes, always included, plus every other `HEALTHY` node's advertised volumes
+    /// from the (Raft-replicated, Phase 8) node registry. In standalone mode
+    /// `metadata.list_nodes()` naturally returns nothing (no node ever registers with
+    /// it), so this degrades to exactly the local-only candidate set pre-Phase-9 code
+    /// used -- no special-casing needed for that case.
+    async fn placement_candidates(&self) -> Vec<s3_placement::Candidate> {
+        let mut candidates: Vec<s3_placement::Candidate> = self
+            .volumes
+            .iter()
+            .map(|&v| s3_placement::Candidate::new(self.node_id, v))
+            .collect();
+
+        if let Ok(nodes) = self.metadata.list_nodes().await {
+            for node in nodes {
+                if node.node_id == self.node_id || node.state != NodeState::Healthy {
+                    continue; // self already added above; only HEALTHY peers qualify
+                }
+                candidates.extend(
+                    node.volumes
+                        .iter()
+                        .map(|&v| s3_placement::Candidate::new(node.node_id, v)),
+                );
+            }
         }
-        let len = self.volumes.len();
-        Ok((0..count)
-            .map(|i| self.volumes[(stripe_index as usize + i) % len])
-            .collect())
+        candidates
     }
 
     async fn write_shard(
@@ -123,37 +136,45 @@ impl ObjectService {
         self.shard_store.put_shard(target, stream).await
     }
 
-    /// Writes one stripe's already-encoded shards concurrently, returning their
-    /// `ShardLocation`s in shard-index order.
+    /// Writes one stripe's already-encoded shards concurrently, placing each one via
+    /// the placement engine (architecture.md §10) rather than always targeting a local
+    /// volume, and returns their `ShardLocation`s in shard-index order.
+    #[allow(clippy::too_many_arguments)]
     async fn write_stripe_shards(
         &self,
+        object_id: ObjectId,
+        version_id: VersionId,
         stripe_index: u32,
         shard_bytes: Vec<Vec<u8>>,
     ) -> Result<Vec<ShardLocation>, S3Error> {
-        let targets = self.select_volumes(stripe_index, shard_bytes.len())?;
-        let writes =
-            shard_bytes
-                .into_iter()
-                .zip(targets)
-                .enumerate()
-                .map(|(i, (bytes, volume_id))| {
-                    let target = ShardTarget {
-                        node_id: self.node_id,
-                        volume_id,
-                    };
-                    async move {
-                        let receipt = self.write_shard(target, bytes).await?;
-                        Ok::<ShardLocation, StorageError>(ShardLocation {
-                            shard_index: i as u16,
-                            node_id: self.node_id,
-                            volume_id,
-                            shard_id: receipt.shard_id,
-                            size: receipt.size,
-                            checksum: receipt.checksum,
-                            generation: 0,
-                        })
-                    }
-                });
+        let candidates = self.placement_candidates().await;
+        let plan = s3_placement::plan_write(
+            object_id,
+            version_id,
+            stripe_index,
+            shard_bytes.len(),
+            &candidates,
+        )
+        .map_err(|e| S3Error::InvalidArgument(e.to_string()))?;
+
+        let writes = shard_bytes.into_iter().zip(plan).map(|(bytes, placed)| {
+            let target = ShardTarget {
+                node_id: placed.node_id,
+                volume_id: placed.volume_id,
+            };
+            async move {
+                let receipt = self.write_shard(target, bytes).await?;
+                Ok::<ShardLocation, StorageError>(ShardLocation {
+                    shard_index: placed.shard_index,
+                    node_id: placed.node_id,
+                    volume_id: placed.volume_id,
+                    shard_id: receipt.shard_id,
+                    size: receipt.size,
+                    checksum: receipt.checksum,
+                    generation: 0,
+                })
+            }
+        });
         Ok(try_join_all(writes).await?)
     }
 
@@ -167,6 +188,14 @@ impl ObjectService {
         requesting_owner: OwnerId,
     ) -> Result<ObjectManifest, S3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
+
+        // Minted once, here, on the coordinator -- never inside a replicated apply()
+        // the way `commit_manifest`'s embedded manifest already assumes (see
+        // `s3-metadata`'s `ResolvedCreateBucket` doc comment for why that distinction
+        // matters). Also doubles as the placement engine's stripe-key input.
+        let object_id = ObjectId::new();
+        let version_id = VersionId::new();
+        let candidate_count = self.placement_candidates().await.len();
 
         // Peek up to the small-object threshold to decide durability policy without
         // buffering the whole object (architecture.md §9/§81).
@@ -195,9 +224,11 @@ impl ObjectService {
             md5.update(&head);
             total_size = head.len() as u64;
 
-            let n = self.volumes.len().clamp(1, 3);
+            let n = candidate_count.clamp(1, 3);
             let shard_bytes: Vec<Vec<u8>> = (0..n).map(|_| head.clone()).collect();
-            let shards = self.write_stripe_shards(0, shard_bytes).await?;
+            let shards = self
+                .write_stripe_shards(object_id, version_id, 0, shard_bytes)
+                .await?;
             stripes.push(Stripe {
                 stripe_index: 0,
                 stripe_offset: 0,
@@ -208,7 +239,7 @@ impl ObjectService {
         } else {
             // Large object: erasure-code it, stripe by stripe, starting with what we
             // already peeked and continuing to stream the rest.
-            let (data_count, parity_count) = choose_erasure_scheme(self.volumes.len());
+            let (data_count, parity_count) = choose_erasure_scheme(candidate_count);
             let codec = RsErasureCodec::new(data_count, parity_count);
             let durability = DurabilityPolicy::Erasure {
                 data: data_count as u8,
@@ -233,7 +264,7 @@ impl ObjectService {
                     S3Error::InvalidArgument(format!("erasure encoding failed: {e}"))
                 })?;
                 let shards = self
-                    .write_stripe_shards(stripe_index, encoded.shards)
+                    .write_stripe_shards(object_id, version_id, stripe_index, encoded.shards)
                     .await?;
 
                 stripes.push(Stripe {
@@ -254,7 +285,9 @@ impl ObjectService {
                 let encoded = codec.encode(&[]).map_err(|e| {
                     S3Error::InvalidArgument(format!("erasure encoding failed: {e}"))
                 })?;
-                let shards = self.write_stripe_shards(0, encoded.shards).await?;
+                let shards = self
+                    .write_stripe_shards(object_id, version_id, 0, encoded.shards)
+                    .await?;
                 stripes.push(Stripe {
                     stripe_index: 0,
                     stripe_offset: 0,
@@ -272,10 +305,10 @@ impl ObjectService {
         let md5_digest: [u8; 16] = md5.finalize().into();
 
         let manifest = ObjectManifest {
-            object_id: ObjectId::new(),
+            object_id,
             bucket_id: bucket.bucket_id,
             key: key.clone(),
-            version_id: VersionId::new(),
+            version_id,
             size: total_size,
             etag: ETag::from_md5(md5_digest),
             sha256: sha256_digest,

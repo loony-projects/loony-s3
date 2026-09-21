@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use s3_core::{ClusterId, NodeId, NodeInfo, NodeState};
+use s3_core::{ClusterId, NodeId, NodeInfo, NodeState, VolumeId};
 use s3_metadata::{MetadataStore, RegisterNode};
 use s3_rpc::{JoinRequest, fetch_health, fetch_members, join_cluster};
 use tokio::sync::RwLock;
@@ -58,6 +58,7 @@ impl ClusterMembershipService {
         local_node_id: NodeId,
         advertised_address: String,
         failure_domain: Vec<String>,
+        volumes: Vec<VolumeId>,
         token: String,
     ) -> Result<Self, ClusterError> {
         metadata.bootstrap_cluster(cluster_id).await?;
@@ -66,6 +67,7 @@ impl ClusterMembershipService {
                 node_id: local_node_id,
                 advertised_address,
                 failure_domain,
+                volumes,
             })
             .await?;
         metadata
@@ -88,6 +90,7 @@ impl ClusterMembershipService {
         local_node_id: NodeId,
         advertised_address: String,
         failure_domain: Vec<String>,
+        volumes: Vec<VolumeId>,
         claimed_cluster_id: Option<ClusterId>,
     ) -> Result<(Self, ClusterId), ClusterError> {
         let http = reqwest::Client::new();
@@ -100,6 +103,7 @@ impl ClusterMembershipService {
                 advertised_address,
                 failure_domain,
                 claimed_cluster_id: claimed_cluster_id.map(|c| c.to_string()),
+                volumes,
             },
         )
         .await?;
@@ -263,6 +267,7 @@ mod tests {
             node_id,
             "self:9100".into(),
             vec![],
+            vec![],
             "token".into(),
         )
         .await
@@ -290,6 +295,7 @@ mod tests {
                 node_id: local,
                 advertised_address: "local:9100".into(),
                 failure_domain: vec![],
+                volumes: vec![],
             })
             .await
             .unwrap();
@@ -303,6 +309,7 @@ mod tests {
                 node_id: peer,
                 advertised_address: "127.0.0.1:1".into(),
                 failure_domain: vec![],
+                volumes: vec![],
             })
             .await
             .unwrap();
@@ -355,6 +362,7 @@ mod tests {
                 node_id: local,
                 advertised_address: "127.0.0.1:1".into(), // would fail if ever pinged
                 failure_domain: vec![],
+                volumes: vec![],
             })
             .await
             .unwrap();

@@ -627,6 +627,7 @@ impl MetadataStore for RedbMetadataStore {
                     generation,
                     last_seen: OffsetDateTime::now_utc(),
                     failure_domain: cmd.failure_domain,
+                    volumes: cmd.volumes,
                 };
                 let bytes = serde_json::to_vec(&info)?;
                 table
@@ -1151,6 +1152,7 @@ mod tests {
                 node_id,
                 advertised_address: "node-a:9100".into(),
                 failure_domain: vec!["rack:a".into()],
+                volumes: vec![],
             })
             .await
             .unwrap();
@@ -1162,6 +1164,7 @@ mod tests {
                 node_id,
                 advertised_address: "node-a:9100".into(),
                 failure_domain: vec!["rack:a".into()],
+                volumes: vec![],
             })
             .await
             .unwrap();
@@ -1184,6 +1187,7 @@ mod tests {
                 node_id,
                 advertised_address: "node-a:9100".into(),
                 failure_domain: vec![],
+                volumes: vec![],
             })
             .await
             .unwrap();
@@ -1206,6 +1210,7 @@ mod tests {
                     node_id: s3_core::NodeId::new(),
                     advertised_address: format!("node-{i}:9100"),
                     failure_domain: vec![],
+                    volumes: vec![],
                 })
                 .await
                 .unwrap();

@@ -3,7 +3,7 @@
 //! own: `s3_core::ShardReceipt`/`ShardStat` already derive `Serialize`/`Deserialize`
 //! and are used directly as JSON bodies.
 
-use s3_core::{NodeId, NodeInfo};
+use s3_core::{NodeId, NodeInfo, VolumeId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +22,9 @@ pub struct JoinRequest {
     pub advertised_address: String,
     pub failure_domain: Vec<String>,
     pub claimed_cluster_id: Option<String>,
+    /// This node's local shard-storage volumes, so the placement engine's cluster-wide
+    /// candidate pool (architecture.md §10) includes them as soon as it joins.
+    pub volumes: Vec<VolumeId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
