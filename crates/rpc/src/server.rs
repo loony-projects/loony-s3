@@ -17,8 +17,9 @@ use axum::{Json, Router};
 use futures::StreamExt;
 use subtle::ConstantTimeEq;
 
+use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
 use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardTarget, VolumeId};
-use s3_metadata::{MetadataStore, RegisterNode};
+use s3_metadata::{MetadataStore, RegisterNode, Raft};
 use s3_storage::{ShardBytesIn, ShardStore};
 
 use crate::PROTOCOL_VERSION;
@@ -33,6 +34,11 @@ pub struct RpcServerState {
     /// Shared cluster token, checked in constant time (prompt §52/§83: "signature
     /// timing attacks" — the same discipline applies to any bearer credential).
     pub token: String,
+    /// This node's Raft engine handle (Phase 8), used to dispatch incoming
+    /// AppendEntries/Vote/InstallSnapshot RPCs from peers. `None` for a node that isn't
+    /// running Raft at all (e.g. in tests that only exercise the shard/cluster-join
+    /// routes) — the raft routes answer 503 rather than panicking in that case.
+    pub raft: Option<Raft>,
 }
 
 pub fn build_router(state: RpcServerState) -> Router {
@@ -45,6 +51,9 @@ pub fn build_router(state: RpcServerState) -> Router {
             "/internal/v1/volumes/:volume_id/shards/:shard_id",
             get(get_shard).delete(delete_shard).head(stat_shard),
         )
+        .route("/internal/v1/raft/append", axum::routing::post(raft_append))
+        .route("/internal/v1/raft/vote", axum::routing::post(raft_vote))
+        .route("/internal/v1/raft/snapshot", axum::routing::post(raft_snapshot))
         .with_state(state)
 }
 
@@ -191,4 +200,41 @@ async fn stat_shard(
             .into_response()),
         None => Ok(StatusCode::NOT_FOUND.into_response()),
     }
+}
+
+/// The three Raft RPCs (Phase 8): unlike every other handler in this file, the response
+/// is always HTTP 200 with the `Result<Resp, RaftError<..>>` `openraft` itself produced
+/// serialized straight into the body -- matching the upstream `raft-kv-memstore`
+/// example's convention, since these `Result`s are exactly what `RaftNetwork`'s
+/// `Result<Resp, RPCError<.., RemoteError<.., Err>>>` on the client side expects to
+/// deserialize. Only auth and "this node isn't running Raft at all" are real HTTP-level
+/// failures here.
+async fn raft_append(
+    State(state): State<RpcServerState>,
+    headers: HeaderMap,
+    Json(req): Json<AppendEntriesRequest<s3_metadata::TypeConfig>>,
+) -> Result<Response, RpcServerError> {
+    check_token(&headers, &state.token)?;
+    let raft = state.raft.as_ref().ok_or(RpcServerError::NotBootstrapped)?;
+    Ok(Json(raft.append_entries(req).await).into_response())
+}
+
+async fn raft_vote(
+    State(state): State<RpcServerState>,
+    headers: HeaderMap,
+    Json(req): Json<VoteRequest<NodeId>>,
+) -> Result<Response, RpcServerError> {
+    check_token(&headers, &state.token)?;
+    let raft = state.raft.as_ref().ok_or(RpcServerError::NotBootstrapped)?;
+    Ok(Json(raft.vote(req).await).into_response())
+}
+
+async fn raft_snapshot(
+    State(state): State<RpcServerState>,
+    headers: HeaderMap,
+    Json(req): Json<InstallSnapshotRequest<s3_metadata::TypeConfig>>,
+) -> Result<Response, RpcServerError> {
+    check_token(&headers, &state.token)?;
+    let raft = state.raft.as_ref().ok_or(RpcServerError::NotBootstrapped)?;
+    Ok(Json(raft.install_snapshot(req).await).into_response())
 }

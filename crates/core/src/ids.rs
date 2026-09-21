@@ -47,9 +47,15 @@ macro_rules! define_uuid_id {
             }
         }
 
+        // A stable, all-zero sentinel -- *not* `Self::new()`. Callers that want a fresh
+        // identity must say so explicitly; `Default` exists only so this type can sit
+        // inside other `Default`-deriving structs and libraries (e.g. `openraft`, which
+        // compares a stored value against a freshly-constructed `Default` as its "no
+        // value yet" sentinel — two independently-minted random UUIDs would almost
+        // never compare equal, silently breaking that check).
         impl Default for $name {
             fn default() -> Self {
-                Self::new()
+                Self(Uuid::nil())
             }
         }
 

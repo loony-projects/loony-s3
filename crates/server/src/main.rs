@@ -17,7 +17,7 @@ use config::{Cli, ClusterConfig, Config, ProcessEnv};
 use s3_api::AppState;
 use s3_cluster::{ClusterIdentity, ClusterMembershipService, NodeIdentity};
 use s3_core::{ClusterId, NodeId};
-use s3_metadata::{Credential, MetadataStore, RedbMetadataStore};
+use s3_metadata::{Credential, MetadataStore, RaftMetadataStore};
 use s3_object::{BucketService, ObjectService};
 use s3_observability::{LoggingConfig, init_tracing, install_recorder};
 use s3_storage::LocalVolumeManager;
@@ -88,8 +88,22 @@ async fn main() -> std::process::ExitCode {
         "server foundation initialized"
     );
 
+    // Every node -- standalone or cluster -- runs metadata as a real `openraft` group
+    // now (Phase 8), not the direct-redb shortcut Phase 2 used while there was only
+    // ever one voter to reason about (architecture.md §5). Standalone's group is a
+    // single voter (itself); Phase 8 wires the *engine* real for that case too, but
+    // cluster mode still runs one independent single-voter group per node rather than
+    // one shared multi-voter group across the cluster -- turning the existing
+    // single-authority node registry (`s3-cluster`) into a genuinely replicated one via
+    // `add_learner`/`change_membership` is follow-up work, not this phase's scope.
     let metadata_path = config.data_dir.join("meta.redb");
-    let metadata = match RedbMetadataStore::open(metadata_path).await {
+    let metadata = match RaftMetadataStore::open_single_node(
+        identity.node_id,
+        config.bind_addr.to_string(),
+        metadata_path,
+    )
+    .await
+    {
         Ok(store) => Arc::new(store),
         Err(err) => {
             tracing::error!(%err, "failed to open metadata store");
@@ -160,7 +174,7 @@ async fn start_cluster_mode(
     cluster_config: &ClusterConfig,
     identity: &NodeIdentity,
     data_dir: &std::path::Path,
-    metadata: Arc<RedbMetadataStore>,
+    metadata: Arc<RaftMetadataStore>,
     shard_store: Arc<dyn s3_storage::ShardStore>,
 ) -> Result<(), std::process::ExitCode> {
     let (token, token_is_dev_default) = resolve_cluster_token(cluster_config.cluster_id.as_deref());
@@ -256,11 +270,17 @@ async fn start_cluster_mode(
         std::time::Duration::from_secs(5),
     ));
 
+    let raft = metadata.raft().clone();
     let rpc_state = s3_rpc::RpcServerState {
         shard_store,
         metadata: metadata as Arc<dyn MetadataStore>,
         local_node: identity.node_id,
         token,
+        // This node's own (currently single-voter, see the comment above `metadata`'s
+        // construction in `main`) Raft engine, so it can answer `raft_append`/
+        // `raft_vote`/`raft_snapshot` from peers once cluster mode's metadata group
+        // really does span multiple voters.
+        raft: Some(raft),
     };
     let rpc_router = s3_rpc::build_router(rpc_state);
     let rpc_listener = match tokio::net::TcpListener::bind(cluster_config.cluster_addr).await {
@@ -312,7 +332,7 @@ fn resolve_cluster_token(cluster_id_hint: Option<&str>) -> (String, bool) {
 /// secret), so it's logged loudly and is not a substitute for setting the env vars in
 /// any deployment that matters.
 async fn seed_root_credential(
-    metadata: &Arc<RedbMetadataStore>,
+    metadata: &Arc<RaftMetadataStore>,
     node_id: NodeId,
 ) -> Result<(), s3_metadata::MetaError> {
     let env_creds = (

@@ -1,4 +1,8 @@
-#[derive(Debug, thiserror::Error)]
+/// Clone + Serialize/Deserialize so a business-logic failure (e.g. `BucketAlreadyExists`)
+/// can travel back through `openraft`'s `client_write` response channel as `C::R`
+/// (Phase 8) exactly like a successful result does — not just infra-level failures like
+/// "not the leader", which `openraft` reports separately via `RaftError`.
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize, serde::Deserialize)]
 pub enum MetaError {
     #[error("bucket {0:?} does not exist")]
     NoSuchBucket(String),
@@ -34,8 +38,21 @@ pub enum MetaError {
     Db(String),
 
     #[error("serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(String),
 
     #[error("background task panicked: {0}")]
     TaskPanicked(String),
+
+    /// This node's Raft engine couldn't service the request — it isn't the leader (and
+    /// doesn't know who is), lost quorum, or the write timed out waiting for consensus
+    /// (Phase 8). Distinct from every other variant here, which are business-logic
+    /// outcomes a *successful* Raft commit can still produce.
+    #[error("metadata Raft group unavailable: {0}")]
+    RaftUnavailable(String),
+}
+
+impl From<serde_json::Error> for MetaError {
+    fn from(e: serde_json::Error) -> Self {
+        MetaError::Serialization(e.to_string())
+    }
 }

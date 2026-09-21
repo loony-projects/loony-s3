@@ -16,6 +16,10 @@ async-trait.workspace = true
 sha2.workspace = true
 md-5.workspace = true
 time.workspace = true
+openraft.workspace = true
+futures.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

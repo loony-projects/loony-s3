@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use s3_core::{BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId};
 use time::OffsetDateTime;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CreateBucket {
     pub name: BucketName,
     pub owner_id: OwnerId,
@@ -41,7 +41,7 @@ pub struct ListObjectsPage {
     pub next_continuation_token: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BeginMultipart {
     pub bucket_id: BucketId,
     pub key: ObjectKey,
@@ -66,7 +66,7 @@ pub struct PartSummary {
     pub etag_md5: [u8; 16],
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompleteMultipart {
     pub upload_id: UploadId,
     /// Client-supplied ordered `(part_number, etag_hex)` list, validated against the
@@ -78,7 +78,7 @@ pub struct CompleteMultipart {
 
 /// Registers (or re-registers, bumping `generation`) a node in the cluster's registry
 /// (architecture.md §34).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RegisterNode {
     pub node_id: NodeId,
     pub advertised_address: String,

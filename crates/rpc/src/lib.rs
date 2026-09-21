@@ -30,6 +30,7 @@
 
 mod client;
 mod error;
+mod raft_network;
 mod server;
 mod types;
 
@@ -40,6 +41,7 @@ pub use client::{
     fetch_members, join_cluster,
 };
 pub use error::RpcServerError;
+pub use raft_network::HttpRaftNetworkFactory;
 pub use server::{RpcServerState, build_router};
 pub use types::{HealthInfo, JoinRequest, JoinResponse};
 
@@ -104,6 +106,7 @@ mod tests {
             metadata: metadata.clone(),
             local_node: node_id,
             token: token.to_string(),
+            raft: None,
         };
         let router = build_router(state);
 
