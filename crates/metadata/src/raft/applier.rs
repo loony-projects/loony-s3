@@ -14,18 +14,21 @@
 use md5::{Digest as _, Md5};
 use redb::{Database, ReadableTable, TableDefinition};
 use s3_core::{
-    Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectId,
-    ObjectKey, ObjectManifest, OwnerId, UploadId, VersionId, VersioningState,
+    Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectKey,
+    ObjectManifest, OwnerId, UploadId, VersioningState,
 };
 use sha2::Sha256;
 use time::OffsetDateTime;
 
 use crate::commands::{
-    BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode,
+    Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
+    RegisterNode,
 };
 use crate::error::MetaError;
-use crate::raft::types::{CommandResponse, MetadataCommand};
+use crate::raft::types::{
+    CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
+    ResolvedCreateBucket,
+};
 use s3_core::PartManifest;
 
 pub(crate) const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
@@ -78,7 +81,7 @@ pub(crate) fn apply_metadata_command(
             record_part(db, upload_id, *part).map(|_| CommandResponse::Unit)
         }
         MetadataCommand::CompleteMultipart(cmd) => {
-            complete_multipart(db, cmd).map(|m| CommandResponse::Manifest(Box::new(m)))
+            complete_multipart(db, *cmd).map(|m| CommandResponse::Manifest(Box::new(m)))
         }
         MetadataCommand::AbortMultipart(upload_id) => abort_multipart(db, upload_id).map(|_| CommandResponse::Unit),
         MetadataCommand::PutCredential(cred) => put_credential(db, *cred).map(|_| CommandResponse::Unit),
@@ -90,7 +93,8 @@ pub(crate) fn apply_metadata_command(
     }
 }
 
-pub(crate) fn create_bucket(db: &Database, cmd: CreateBucket) -> Result<Bucket, MetaError> {
+pub(crate) fn create_bucket(db: &Database, resolved: ResolvedCreateBucket) -> Result<Bucket, MetaError> {
+    let ResolvedCreateBucket { cmd, bucket_id, created_at } = resolved;
     let write_txn = db.begin_write().map_err(db_err)?;
     let bucket = {
         let mut table = write_txn.open_table(BUCKETS).map_err(db_err)?;
@@ -98,10 +102,10 @@ pub(crate) fn create_bucket(db: &Database, cmd: CreateBucket) -> Result<Bucket, 
             return Err(MetaError::BucketAlreadyExists(cmd.name.as_str().to_string()));
         }
         let bucket = Bucket {
-            bucket_id: BucketId::new(),
+            bucket_id,
             name: cmd.name.clone(),
             owner_id: cmd.owner_id,
-            created_at: OffsetDateTime::now_utc(),
+            created_at,
             region: cmd.region,
             versioning_state: VersioningState::Disabled,
             quota_bytes: None,
@@ -291,9 +295,9 @@ pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<Lis
     })
 }
 
-pub(crate) fn begin_multipart(db: &Database, cmd: BeginMultipart) -> Result<UploadId, MetaError> {
+pub(crate) fn begin_multipart(db: &Database, resolved: ResolvedBeginMultipart) -> Result<UploadId, MetaError> {
+    let ResolvedBeginMultipart { cmd, upload_id, initiated_at } = resolved;
     let write_txn = db.begin_write().map_err(db_err)?;
-    let upload_id = UploadId::new();
     {
         let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
         let state = MultipartUploadState {
@@ -301,7 +305,7 @@ pub(crate) fn begin_multipart(db: &Database, cmd: BeginMultipart) -> Result<Uplo
             bucket_id: cmd.bucket_id,
             key: cmd.key,
             content_type: cmd.content_type,
-            initiated_at: OffsetDateTime::now_utc(),
+            initiated_at,
             parts: Default::default(),
         };
         let bytes = serde_json::to_vec(&state)?;
@@ -355,7 +359,8 @@ pub(crate) fn list_parts(db: &Database, upload_id: UploadId) -> Result<Vec<PartS
         .collect())
 }
 
-pub(crate) fn complete_multipart(db: &Database, cmd: CompleteMultipart) -> Result<ObjectManifest, MetaError> {
+pub(crate) fn complete_multipart(db: &Database, resolved: ResolvedCompleteMultipart) -> Result<ObjectManifest, MetaError> {
+    let ResolvedCompleteMultipart { cmd, object_id, version_id, created_at } = resolved;
     let write_txn = db.begin_write().map_err(db_err)?;
     let manifest = {
         let mut multipart = write_txn.open_table(MULTIPART).map_err(db_err)?;
@@ -416,16 +421,16 @@ pub(crate) fn complete_multipart(db: &Database, cmd: CompleteMultipart) -> Resul
         };
 
         let manifest = ObjectManifest {
-            object_id: ObjectId::new(),
+            object_id,
             bucket_id: state.bucket_id,
             key: state.key.clone(),
-            version_id: VersionId::new(),
+            version_id,
             size: total_size,
             etag,
             sha256,
             content_type: cmd.content_type,
             user_metadata: Default::default(),
-            created_at: OffsetDateTime::now_utc(),
+            created_at,
             delete_marker: false,
             parts,
         };

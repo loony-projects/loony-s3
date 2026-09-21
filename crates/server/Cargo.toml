@@ -26,3 +26,4 @@ tracing.workspace = true
 axum.workspace = true
 sha2.workspace = true
 time.workspace = true
+openraft.workspace = true

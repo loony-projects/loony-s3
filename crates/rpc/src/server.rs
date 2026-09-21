@@ -84,10 +84,24 @@ async fn health(
     }))
 }
 
+/// How long a join waits for the new learner to catch up via replication (which can
+/// mean a full snapshot transfer, not just a handful of log entries) before giving up.
+/// Comfortably longer than `RaftMetadataStore`'s own 5s write timeout, since this is a
+/// one-time, potentially-large catch-up rather than a single command commit.
+const ADD_LEARNER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Handles a peer's join request: validates the claimed cluster id (if any) against
 /// this node's own (architecture.md §36 — never silently merge unrelated clusters),
-/// registers the joiner in the local node registry, and hands back the current member
-/// list so the joiner starts with a real view instead of an empty one.
+/// adds the joiner as a real Raft learner of this node's metadata group (blocking until
+/// it has replicated up to date — see `ADD_LEARNER_TIMEOUT`), registers it in the node
+/// registry (itself now a replicated write, same as any other), and hands back the
+/// current member list so the joiner starts with a real view instead of an empty one.
+///
+/// This only succeeds when called against the group's current leader — there is no
+/// forwarding yet if it isn't. In practice that means directing `--join` at the
+/// bootstrap node specifically, since a single-voter group (still the only shape a
+/// group can be until an explicit voter-promotion step exists, see `docs/cluster.md`)
+/// can never change leader out from under it.
 async fn join(
     State(state): State<RpcServerState>,
     headers: HeaderMap,
@@ -109,6 +123,18 @@ async fn join(
             requested: claimed.clone(),
         }
         .into());
+    }
+
+    if let Some(raft) = &state.raft {
+        let node = openraft::BasicNode::new(req.advertised_address.clone());
+        tokio::time::timeout(ADD_LEARNER_TIMEOUT, raft.add_learner(req.node_id, node, true))
+            .await
+            .map_err(|_| {
+                RpcServerError::RaftMembershipChange(
+                    "timed out waiting for the new learner to catch up".into(),
+                )
+            })?
+            .map_err(|e| RpcServerError::RaftMembershipChange(e.to_string()))?;
     }
 
     state

@@ -33,16 +33,31 @@ than hanging forever, and a node that fell behind past a log purge catching up v
 `InstallSnapshot` — plus a real standalone-server smoke test (AWS CLI PUT/GET/DELETE,
 then a process restart proving the bucket survives via the persisted Raft log).
 
-**What Phase 8 does not yet mean**, stated plainly: cluster mode still runs one
-independent single-voter Raft group *per node* rather than one shared multi-voter group
-spanning the cluster — the internal RPC routes for AppendEntries/Vote/InstallSnapshot
-(`s3_rpc::raft_network`) and the engine itself are real and tested, but Phase 7's
-single-authority node registry hasn't yet been rewired to actually call
-`add_learner`/`change_membership` for real cross-node replication. So bucket/object
-metadata is **still not** shared across cluster nodes — that wiring, plus distributed
-PUT/GET, is Phase 9. Internal RPC auth is still a bearer token, not the mTLS the
-architecture doc commits to for production. Multipart upload and Range requests also
-remain unimplemented (separate, later-scoped phases).
+**Since Phase 8: cluster metadata replication is wired up.** A `--join` now adds the
+joining node as a real `openraft` learner of the bootstrap node's metadata group
+(`Raft::add_learner`, called from the internal `join` RPC handler) instead of each node
+running its own independent single-voter group — so bucket/object metadata genuinely
+replicates: a bucket (and its objects) created on node 1 before node 2 ever joined is
+visible via `ListBuckets`/`ListObjectsV2`/`HeadObject` on node 2 too, verified against
+real, separate OS processes and covered by an automated test
+(`crates/rpc/tests/cluster_join_replication.rs`). That work also surfaced and fixed a
+real bug: `CreateBucket`/`BeginMultipart`/`CompleteMultipart` used to mint their id
+*inside* `apply()`, which every replica runs independently — invisible with one voter,
+a real divergence the moment a second one existed. IDs and timestamps are now resolved
+once, by whichever node proposes the command, and carried inside it.
+
+**What's still not there**: a learner is never automatically promoted to a voter (no
+`change_membership` call exists yet), so a single-voter group's leader still can't fail
+over to a second node — matching architecture.md §5's documented design (a small,
+explicit voter set) but meaning today's cluster mode has no real HA story yet. And
+separately — this is genuinely Phase 9's scope, not a gap in Phase 8's work — shard
+*bytes* still aren't fetchable across nodes: node 2 can correctly answer metadata
+queries about an object node 1 wrote, but `GetObject` on node 2 fails, because the
+shards physically live on node 1's disk and `ObjectService` has no remote-shard-fetch
+path yet. Placement, remote shard writes, and distributed/degraded GET are Phase 9.
+Internal RPC auth is still a bearer token, not the mTLS the architecture doc commits to
+for production. Multipart upload and Range requests also remain unimplemented
+(separate, later-scoped phases).
 
 **Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (AWS
 CLI, boto3, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env

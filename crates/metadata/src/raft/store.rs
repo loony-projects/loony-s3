@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use openraft::{BasicNode, Config, Raft};
 use redb::Database;
 use s3_core::{
-    Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectKey,
-    ObjectManifest, OwnerId, PartManifest, UploadId,
+    Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
+    ObjectManifest, OwnerId, PartManifest, UploadId, VersionId,
 };
 
 use crate::commands::{
@@ -29,7 +29,10 @@ use crate::error::MetaError;
 use crate::raft::applier::{self, db_err};
 use crate::raft::log_store::RedbLogStore;
 use crate::raft::state_machine::RedbStateMachineStore;
-use crate::raft::types::{CommandResponse, MetadataCommand, TypeConfig};
+use crate::raft::types::{
+    CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
+    ResolvedCreateBucket, TypeConfig,
+};
 use crate::store::MetadataStore;
 
 pub struct RaftMetadataStore {
@@ -178,7 +181,17 @@ fn unexpected_response() -> MetaError {
 #[async_trait]
 impl MetadataStore for RaftMetadataStore {
     async fn create_bucket(&self, cmd: CreateBucket) -> Result<Bucket, MetaError> {
-        match self.write(MetadataCommand::CreateBucket(cmd)).await? {
+        // The bucket's id and creation time are resolved *here*, once, before the
+        // command is proposed -- never inside `apply()`, which every voter/learner
+        // runs independently and which must therefore be fully deterministic. See
+        // `ResolvedCreateBucket`'s doc comment for how this went wrong before it was
+        // fixed.
+        let resolved = ResolvedCreateBucket {
+            cmd,
+            bucket_id: BucketId::new(),
+            created_at: time::OffsetDateTime::now_utc(),
+        };
+        match self.write(MetadataCommand::CreateBucket(resolved)).await? {
             CommandResponse::Bucket(b) => Ok(*b),
             _ => Err(unexpected_response()),
         }
@@ -228,7 +241,12 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn begin_multipart(&self, cmd: BeginMultipart) -> Result<UploadId, MetaError> {
-        match self.write(MetadataCommand::BeginMultipart(cmd)).await? {
+        let resolved = ResolvedBeginMultipart {
+            cmd,
+            upload_id: UploadId::new(),
+            initiated_at: time::OffsetDateTime::now_utc(),
+        };
+        match self.write(MetadataCommand::BeginMultipart(resolved)).await? {
             CommandResponse::UploadId(id) => Ok(id),
             _ => Err(unexpected_response()),
         }
@@ -245,7 +263,16 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn complete_multipart(&self, cmd: CompleteMultipart) -> Result<ObjectManifest, MetaError> {
-        match self.write(MetadataCommand::CompleteMultipart(cmd)).await? {
+        let resolved = ResolvedCompleteMultipart {
+            cmd,
+            object_id: ObjectId::new(),
+            version_id: VersionId::new(),
+            created_at: time::OffsetDateTime::now_utc(),
+        };
+        match self
+            .write(MetadataCommand::CompleteMultipart(Box::new(resolved)))
+            .await?
+        {
             CommandResponse::Manifest(m) => Ok(*m),
             _ => Err(unexpected_response()),
         }

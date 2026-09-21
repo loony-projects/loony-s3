@@ -49,22 +49,43 @@ distributed right now:
 - A real `openraft`-backed consensus engine (Phase 8) — genuine leader election, log
   replication, snapshotting, and recovery, tested against a real 3-node cluster over
   actual HTTP (`crates/rpc/tests/raft_cluster.rs`).
+- **Bucket and object *metadata* genuinely replicates across nodes.** A `--join` adds
+  the joining node as a real `openraft` learner of the bootstrap node's metadata group
+  (`Raft::add_learner`, called from the `join` RPC handler) rather than each node running
+  its own independent single-voter group — so a bucket created on node 1, including
+  ones that existed *before* node 2 ever joined, is visible via `ListBuckets`/
+  `ListObjectsV2`/`HeadObject` on node 2 too. Verified against real, separate
+  `s3-server` processes, not just in-process tests
+  (`crates/rpc/tests/cluster_join_replication.rs` covers the same scenario
+  automatically). This closes the gap this doc used to describe as "a bucket created on
+  node 1 is invisible on node 2."
 
-**What's not wired together yet:** every node runs its **own independent single-voter**
-Raft group for its metadata, not one shared multi-voter group spanning the cluster. The
-engine that *would* make a real multi-voter group work is built and tested — what's
-missing is cluster mode actually calling `add_learner`/`change_membership` to form one,
-rather than each node bootstrapping its own solo group. The practical consequence:
+  Getting here surfaced a real bug worth naming, since it's the kind of thing that only
+  shows up once a second voter/learner actually exists: `CreateBucket` (and
+  `BeginMultipart`/`CompleteMultipart`) used to mint their id (`BucketId::new()` etc.)
+  *inside* the state machine's `apply()` — which every replica runs independently. A
+  single-voter group never noticed, because there was only ever one application of
+  `apply()` to disagree with. The fix resolves every id and timestamp once, on
+  whichever node first proposes the command, and carries it inside the command itself;
+  every replica's `apply()` is now a pure function of the command, as a replicated state
+  machine requires.
 
-> **A bucket created on node 1 is invisible on node 2.** Each node's bucket/object
-> metadata is private to itself. Only cluster *membership* (the node registry) is
-> actually shared across the cluster right now.
+**What's still not wired up:** a joining node becomes a **learner**, never
+automatically a **voter** — matching architecture.md §5's documented design (a small,
+explicit voter set; everything else is a learner at most). There's no promotion path
+yet (no `change_membership` call anywhere), so a single-voter group's leader can never
+fail over to a second node today — if the bootstrap node goes down, the cluster's
+metadata group has no live voter left, even though a learner might have a fully
+caught-up copy of the data. Multi-voter failover is real future work, not a background
+task in progress.
 
-So today, cluster mode is genuinely useful for testing bootstrap/join/heartbeat
-mechanics and the shard-transfer/RPC layer end to end — but routing S3 traffic to
-multiple nodes and expecting a consistent view of your buckets across them will not work
-yet. Wiring real multi-voter metadata replication (so the above stops being true) is the
-next scoped piece of work, not a background task already in progress.
+Separately, and this is the actual next phase (Phase 9, "Distributed PUT/GET"): shard
+*bytes* are still not fetchable across nodes. Metadata replication means node 2 now
+correctly answers `HeadObject`/`ListObjectsV2` for an object node 1 wrote, but a `GET`
+of that object's bytes through node 2 fails, because the object's shards physically
+live on node 1's local disk and there's no remote-shard-fetch path in `ObjectService`
+yet. Placement, remote shard writes, and distributed/degraded GET are what Phase 9
+adds.
 
 Internal RPC authentication is a shared bearer token (`S3_CLUSTER_TOKEN`), checked in
 constant time — not the mutual TLS the architecture doc commits to for a production

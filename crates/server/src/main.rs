@@ -1,25 +1,27 @@
 //! `server` binary: config, `--mode standalone|cluster` dispatch, and wiring of the
 //! concrete trait implementations from every other crate. See ../../docs/architecture.md.
 //!
-//! Phase 7 status: standalone mode serves the real S3 API behind SigV4 auth. Cluster
-//! mode now bootstraps or joins a real cluster (node registry + heartbeat-driven
-//! failure detection over the Phase 6 RPC transport) and serves the S3 API alongside
-//! it — but each node's bucket/object metadata is still local to itself; unifying that
-//! is Phase 8 (Raft replication) + Phase 9 (distributed PUT/GET). See
-//! `s3_cluster::service`'s module docs for exactly what "cluster" means before then.
+//! Cluster-mode metadata status: a joining node is added as a real `openraft` *learner*
+//! of the bootstrap node's metadata group (not its own independent single-voter group,
+//! the way Phase 8 originally left it) — see `join_metadata_group`'s doc comment and
+//! `docs/cluster.md` for exactly what this does and doesn't mean yet (learners
+//! replicate; voter promotion is still a manual follow-up, not automatic).
 
 mod config;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use clap::Parser;
-use config::{Cli, ClusterConfig, Config, ProcessEnv};
+use config::{Cli, ClusterConfig, Config, Mode, ProcessEnv};
+use openraft::BasicNode;
 use s3_api::AppState;
 use s3_cluster::{ClusterIdentity, ClusterMembershipService, NodeIdentity};
 use s3_core::{ClusterId, NodeId};
 use s3_metadata::{Credential, MetadataStore, RaftMetadataStore};
 use s3_object::{BucketService, ObjectService};
 use s3_observability::{LoggingConfig, init_tracing, install_recorder};
+use s3_rpc::HttpRaftNetworkFactory;
 use s3_storage::LocalVolumeManager;
 use sha2::{Digest, Sha256};
 
@@ -88,30 +90,87 @@ async fn main() -> std::process::ExitCode {
         "server foundation initialized"
     );
 
-    // Every node -- standalone or cluster -- runs metadata as a real `openraft` group
-    // now (Phase 8), not the direct-redb shortcut Phase 2 used while there was only
-    // ever one voter to reason about (architecture.md §5). Standalone's group is a
-    // single voter (itself); Phase 8 wires the *engine* real for that case too, but
-    // cluster mode still runs one independent single-voter group per node rather than
-    // one shared multi-voter group across the cluster -- turning the existing
-    // single-authority node registry (`s3-cluster`) into a genuinely replicated one via
-    // `add_learner`/`change_membership` is follow-up work, not this phase's scope.
+    // Every node runs metadata as a real `openraft` group (Phase 8) -- not the
+    // direct-redb shortcut Phase 2 used while there was only ever one voter to reason
+    // about (architecture.md §5). Standalone and a cluster bootstrap node both
+    // initialize as a single-voter group over themselves; a joining node opens its
+    // store *uninitialized* and is added as a learner of the bootstrap node's group
+    // below, in `start_cluster_mode` -- see that function's doc comment.
     let metadata_path = config.data_dir.join("meta.redb");
-    let metadata = match RaftMetadataStore::open_single_node(
-        identity.node_id,
-        config.bind_addr.to_string(),
-        metadata_path,
-    )
-    .await
-    {
-        Ok(store) => Arc::new(store),
-        Err(err) => {
-            tracing::error!(%err, "failed to open metadata store");
-            return std::process::ExitCode::FAILURE;
+    let is_joining = config.mode == Mode::Cluster
+        && config.cluster.as_ref().is_some_and(|c| !c.bootstrap);
+
+    // Resolved once here (rather than inside `start_cluster_mode`) because the token is
+    // also needed to build this node's `HttpRaftNetworkFactory` before metadata can even
+    // open in cluster mode -- standalone never needs it.
+    let cluster_token = config.cluster.as_ref().map(|c| {
+        let (token, is_dev_default) = resolve_cluster_token(c.cluster_id.as_deref());
+        if is_dev_default {
+            tracing::warn!(
+                "no S3_CLUSTER_TOKEN set -- using a token derived from the cluster id. Fine \
+                 for local development, not for anything else (see docs/architecture.md §41)."
+            );
+        }
+        token
+    });
+
+    let metadata: Arc<RaftMetadataStore> = match &config.cluster {
+        None => match RaftMetadataStore::open_single_node(
+            identity.node_id,
+            config.bind_addr.to_string(),
+            metadata_path,
+        )
+        .await
+        {
+            Ok(store) => Arc::new(store),
+            Err(err) => {
+                tracing::error!(%err, "failed to open metadata store");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        Some(cluster_config) => {
+            let network = HttpRaftNetworkFactory::new(cluster_token.clone().unwrap());
+            let store = match RaftMetadataStore::open(identity.node_id, metadata_path, network).await {
+                Ok(store) => store,
+                Err(err) => {
+                    tracing::error!(%err, "failed to open metadata store");
+                    return std::process::ExitCode::FAILURE;
+                }
+            };
+            if cluster_config.bootstrap {
+                // Same effect as `open_single_node`, but over the real
+                // `HttpRaftNetworkFactory` this node will need once a peer joins it.
+                match store.raft().is_initialized().await {
+                    Ok(false) => {
+                        let mut members = BTreeMap::new();
+                        members.insert(identity.node_id, BasicNode::new(cluster_config.advertise_addr.clone()));
+                        if let Err(err) = store.raft().initialize(members).await {
+                            tracing::error!(%err, "failed to initialize metadata group");
+                            return std::process::ExitCode::FAILURE;
+                        }
+                    }
+                    Ok(true) => {} // restart of an already-bootstrapped node
+                    Err(err) => {
+                        tracing::error!(%err, "failed to query metadata group state");
+                        return std::process::ExitCode::FAILURE;
+                    }
+                }
+            }
+            // Joining: intentionally left uninitialized here. `start_cluster_mode`
+            // brings the RPC server up first, then joins -- which adds this node as a
+            // learner of the *existing* group and blocks until it has replicated.
+            Arc::new(store)
         }
     };
 
-    if let Err(err) = seed_root_credential(&metadata, identity.node_id).await {
+    // A joining node can't accept this write yet -- it isn't part of any initialized
+    // group until `start_cluster_mode` below adds it as a learner, and only a group's
+    // leader (which a fresh learner never is) can commit a write at all. It doesn't
+    // need to anyway: the credential already exists in the state it's about to
+    // replicate from the group it's joining.
+    if !is_joining
+        && let Err(err) = seed_root_credential(&metadata, identity.node_id).await
+    {
         tracing::error!(%err, "failed to seed root credential");
         return std::process::ExitCode::FAILURE;
     }
@@ -123,6 +182,7 @@ async fn main() -> std::process::ExitCode {
             &config.data_dir,
             metadata.clone(),
             volumes.clone(),
+            cluster_token.unwrap(),
         )
         .await
     {
@@ -167,8 +227,18 @@ async fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-/// Bootstraps or joins the cluster, then starts the internal RPC server (shard I/O +
-/// cluster protocol, Phase 6/7) and, if this node is the authority, the heartbeat loop.
+/// Starts this node's internal RPC server, then bootstraps or joins the cluster, then
+/// starts the heartbeat loop.
+///
+/// The RPC server has to come up *before* a join is attempted: joining now means this
+/// node is added as a real `openraft` learner of the seed's metadata group
+/// (`crates/rpc/src/server.rs`'s `join` handler calls `Raft::add_learner`), and that
+/// call blocks on the seed's side until this node has replicated up to date -- which
+/// means the seed needs to be able to reach this node's `raft/append`/`raft/snapshot`
+/// routes for the join call to ever return. A bootstrap node doesn't strictly need the
+/// server up first (nothing is replicating to it yet), but starting it first
+/// unconditionally keeps this function's shape the same for both paths.
+///
 /// Returns `Err(exit_code)` on any failure that should stop startup.
 async fn start_cluster_mode(
     cluster_config: &ClusterConfig,
@@ -176,14 +246,34 @@ async fn start_cluster_mode(
     data_dir: &std::path::Path,
     metadata: Arc<RaftMetadataStore>,
     shard_store: Arc<dyn s3_storage::ShardStore>,
+    token: String,
 ) -> Result<(), std::process::ExitCode> {
-    let (token, token_is_dev_default) = resolve_cluster_token(cluster_config.cluster_id.as_deref());
-    if token_is_dev_default {
-        tracing::warn!(
-            "no S3_CLUSTER_TOKEN set -- using a token derived from the cluster id. Fine for \
-             local development, not for anything else (see docs/architecture.md §41)."
-        );
-    }
+    let raft = metadata.raft().clone();
+    let rpc_state = s3_rpc::RpcServerState {
+        shard_store,
+        metadata: metadata.clone() as Arc<dyn MetadataStore>,
+        local_node: identity.node_id,
+        token: token.clone(),
+        raft: Some(raft),
+    };
+    let rpc_router = s3_rpc::build_router(rpc_state);
+    let rpc_listener = match tokio::net::TcpListener::bind(cluster_config.cluster_addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!(%err, addr = %cluster_config.cluster_addr, "failed to bind internal RPC address");
+            return Err(std::process::ExitCode::FAILURE);
+        }
+    };
+    tracing::info!(addr = %cluster_config.cluster_addr, "internal RPC listening");
+    eprintln!(
+        "server: internal RPC listening on http://{}",
+        cluster_config.cluster_addr
+    );
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(rpc_listener, rpc_router).await {
+            tracing::error!(%err, "internal RPC server exited with an error");
+        }
+    });
 
     let advertise_addr = cluster_config.advertise_addr.clone();
 
@@ -269,37 +359,6 @@ async fn start_cluster_mode(
         membership.clone(),
         std::time::Duration::from_secs(5),
     ));
-
-    let raft = metadata.raft().clone();
-    let rpc_state = s3_rpc::RpcServerState {
-        shard_store,
-        metadata: metadata as Arc<dyn MetadataStore>,
-        local_node: identity.node_id,
-        token,
-        // This node's own (currently single-voter, see the comment above `metadata`'s
-        // construction in `main`) Raft engine, so it can answer `raft_append`/
-        // `raft_vote`/`raft_snapshot` from peers once cluster mode's metadata group
-        // really does span multiple voters.
-        raft: Some(raft),
-    };
-    let rpc_router = s3_rpc::build_router(rpc_state);
-    let rpc_listener = match tokio::net::TcpListener::bind(cluster_config.cluster_addr).await {
-        Ok(listener) => listener,
-        Err(err) => {
-            tracing::error!(%err, addr = %cluster_config.cluster_addr, "failed to bind internal RPC address");
-            return Err(std::process::ExitCode::FAILURE);
-        }
-    };
-    tracing::info!(addr = %cluster_config.cluster_addr, "internal RPC listening");
-    eprintln!(
-        "server: internal RPC listening on http://{}",
-        cluster_config.cluster_addr
-    );
-    tokio::spawn(async move {
-        if let Err(err) = axum::serve(rpc_listener, rpc_router).await {
-            tracing::error!(%err, "internal RPC server exited with an error");
-        }
-    });
 
     Ok(())
 }

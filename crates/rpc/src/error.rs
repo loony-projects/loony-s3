@@ -13,6 +13,12 @@ pub enum RpcServerError {
     Unauthorized,
     #[error("this node has not bootstrapped or joined a cluster yet")]
     NotBootstrapped,
+    /// Adding the joiner as a Raft learner failed — most likely because this node isn't
+    /// the metadata group's leader (a join has to be directed at the leader; there's no
+    /// automatic forwarding yet), or the joiner never became reachable for replication
+    /// to catch it up within the timeout.
+    #[error("failed to add the joining node to the metadata group: {0}")]
+    RaftMembershipChange(String),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error(transparent)]
@@ -24,6 +30,10 @@ impl IntoResponse for RpcServerError {
         match &self {
             RpcServerError::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             RpcServerError::NotBootstrapped => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            RpcServerError::RaftMembershipChange(_) => {
+                tracing::error!(error = %self, "failed to add joining node as a Raft learner");
+                (StatusCode::SERVICE_UNAVAILABLE, self.to_string()).into_response()
+            }
             RpcServerError::Storage(StorageError::NotFound(_)) => {
                 StatusCode::NOT_FOUND.into_response()
             }
