@@ -200,12 +200,24 @@ export function BucketPage() {
   async function handleDownload(key: string) {
     try {
       const url = await presignGetUrl(bucket, key, 300);
+      // The `download` attribute on an <a> is only honored by browsers for
+      // same-origin URLs -- for a cross-origin one (the normal case here: the API
+      // is deployed on a different origin than this app, vite.config.ts) browsers
+      // silently ignore it and just navigate the tab to the raw resource instead,
+      // replacing the app rather than downloading anything. Fetching the bytes into
+      // a blob first sidesteps that: a blob: URL is always same-origin, so `download`
+      // works regardless of where the API lives.
+      const res = await fetch(url);
+      if (!res.ok) throw new ApiError(res.status, 'Failed to download object');
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
+      link.href = objectUrl;
       link.download = key.split('/').pop() ?? key;
       link.click();
+      URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Failed to generate download link');
+      toast.error(err instanceof ApiError ? err.message : 'Failed to download object');
     }
   }
 
