@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use s3_metadata::MetaError;
-use s3_storage::StorageError;
+use loony_metadata::MetaError;
+use loony_storage::StorageError;
 
 /// Errors an RPC *server* handler can produce. Distinct from [`StorageError`]/
 /// [`MetaError`] because "the caller didn't authenticate" or "this node hasn't

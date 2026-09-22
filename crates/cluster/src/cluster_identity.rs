@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use s3_core::ClusterId;
+use loony_core::ClusterId;
 
 use crate::error::ClusterError;
 

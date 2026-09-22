@@ -14,7 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use md5::{Digest as _, Md5};
 use redb::{Database, ReadableTable, TableDefinition};
-use s3_core::{
+use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectId,
     ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState,
 };
@@ -701,7 +701,7 @@ impl MetadataStore for RedbMetadataStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use s3_core::{DurabilityPolicy, NodeId, ShardLocation, Stripe, VolumeId};
+    use loony_core::{DurabilityPolicy, NodeId, ShardLocation, Stripe, VolumeId};
 
     async fn store() -> RedbMetadataStore {
         let dir = tempfile::tempdir().unwrap();
@@ -716,7 +716,7 @@ mod tests {
             shard_index: index,
             node_id: NodeId::new(),
             volume_id: VolumeId::new(),
-            shard_id: s3_core::ShardId::new(),
+            shard_id: loony_core::ShardId::new(),
             size: 3,
             checksum: [index as u8; 32],
             generation: 0,
@@ -1147,14 +1147,14 @@ mod tests {
         let store = store().await;
         assert_eq!(store.get_cluster_id().await.unwrap(), None);
 
-        let id = s3_core::ClusterId::parse("cluster-one").unwrap();
+        let id = loony_core::ClusterId::parse("cluster-one").unwrap();
         store.bootstrap_cluster(id.clone()).await.unwrap();
         assert_eq!(store.get_cluster_id().await.unwrap(), Some(id.clone()));
 
         // Calling it again with the same id is a no-op, not an error.
         store.bootstrap_cluster(id.clone()).await.unwrap();
 
-        let other = s3_core::ClusterId::parse("cluster-two").unwrap();
+        let other = loony_core::ClusterId::parse("cluster-two").unwrap();
         let err = store.bootstrap_cluster(other).await.unwrap_err();
         assert!(matches!(err, MetaError::ClusterIdMismatch { .. }));
         // The mismatch attempt didn't change anything.
@@ -1164,7 +1164,7 @@ mod tests {
     #[tokio::test]
     async fn register_node_bumps_generation_on_rejoin() {
         let store = store().await;
-        let node_id = s3_core::NodeId::new();
+        let node_id = loony_core::NodeId::new();
 
         let first = store
             .register_node(RegisterNode {
@@ -1176,7 +1176,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.generation, 0);
-        assert_eq!(first.state, s3_core::NodeState::Joining);
+        assert_eq!(first.state, loony_core::NodeState::Joining);
 
         let second = store
             .register_node(RegisterNode {
@@ -1193,10 +1193,10 @@ mod tests {
     #[tokio::test]
     async fn update_node_state_requires_prior_registration() {
         let store = store().await;
-        let node_id = s3_core::NodeId::new();
+        let node_id = loony_core::NodeId::new();
 
         let err = store
-            .update_node_state(node_id, s3_core::NodeState::Healthy)
+            .update_node_state(node_id, loony_core::NodeState::Healthy)
             .await
             .unwrap_err();
         assert!(matches!(err, MetaError::NoSuchNode(_)));
@@ -1211,13 +1211,13 @@ mod tests {
             .await
             .unwrap();
         store
-            .update_node_state(node_id, s3_core::NodeState::Healthy)
+            .update_node_state(node_id, loony_core::NodeState::Healthy)
             .await
             .unwrap();
 
         let nodes = store.list_nodes().await.unwrap();
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].state, s3_core::NodeState::Healthy);
+        assert_eq!(nodes[0].state, loony_core::NodeState::Healthy);
     }
 
     #[tokio::test]
@@ -1226,7 +1226,7 @@ mod tests {
         for i in 0..3 {
             store
                 .register_node(RegisterNode {
-                    node_id: s3_core::NodeId::new(),
+                    node_id: loony_core::NodeId::new(),
                     advertised_address: format!("node-{i}:9100"),
                     failure_domain: vec![],
                     volumes: vec![],

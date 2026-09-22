@@ -13,7 +13,7 @@
 
 use md5::{Digest as _, Md5};
 use redb::{Database, ReadableTable, TableDefinition};
-use s3_core::{
+use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectKey,
     ObjectManifest, OwnerId, UploadId, VersioningState,
 };
@@ -29,7 +29,7 @@ use crate::raft::types::{
     CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
     ResolvedCreateBucket,
 };
-use s3_core::PartManifest;
+use loony_core::PartManifest;
 
 pub(crate) const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
 pub(crate) const OBJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("objects");

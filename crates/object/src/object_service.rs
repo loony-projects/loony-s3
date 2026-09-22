@@ -5,17 +5,17 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::future::try_join_all;
 use md5::{Digest as _, Md5};
-use s3_core::{
+use loony_core::{
     Bucket, BucketName, DurabilityPolicy, ETag, NodeId, NodeState, ObjectId, ObjectKey,
     ObjectManifest, OwnerId, PartManifest, ShardLocation, ShardTarget, Stripe, UploadId, VersionId,
     VolumeId,
 };
-use s3_erasure::{ErasureCodec, RsErasureCodec};
-use s3_metadata::{
+use loony_erasure::{ErasureCodec, RsErasureCodec};
+use loony_metadata::{
     BeginMultipart, CompleteMultipart, ListObjectsPage, ListObjectsQuery, MetaError, MetadataStore,
     PartSummary,
 };
-use s3_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
+use loony_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
 use sha2::Sha256;
 use time::OffsetDateTime;
 
@@ -32,7 +32,7 @@ const STRIPE_SIZE: usize = 8 * 1024 * 1024;
 
 /// The Object Service (architecture.md §1/§5): PutObject/GetObject/HeadObject/
 /// DeleteObject/ListObjectsV2, orchestrating [`MetadataStore`], [`ShardStore`], and
-/// (from this phase on) [`s3_erasure::ErasureCodec`] for real durability, plus
+/// (from this phase on) [`loony_erasure::ErasureCodec`] for real durability, plus
 /// ownership-based authorization (architecture.md §55) on every method.
 ///
 /// **Durability policy** (architecture.md §9): objects under [`SMALL_OBJECT_THRESHOLD`]
@@ -108,11 +108,11 @@ impl ObjectService {
     /// `metadata.list_nodes()` naturally returns nothing (no node ever registers with
     /// it), so this degrades to exactly the local-only candidate set pre-Phase-9 code
     /// used -- no special-casing needed for that case.
-    async fn placement_candidates(&self) -> Vec<s3_placement::Candidate> {
-        let mut candidates: Vec<s3_placement::Candidate> = self
+    async fn placement_candidates(&self) -> Vec<loony_placement::Candidate> {
+        let mut candidates: Vec<loony_placement::Candidate> = self
             .volumes
             .iter()
-            .map(|&v| s3_placement::Candidate::new(self.node_id, v))
+            .map(|&v| loony_placement::Candidate::new(self.node_id, v))
             .collect();
 
         if let Ok(nodes) = self.metadata.list_nodes().await {
@@ -123,7 +123,7 @@ impl ObjectService {
                 candidates.extend(
                     node.volumes
                         .iter()
-                        .map(|&v| s3_placement::Candidate::new(node.node_id, v)),
+                        .map(|&v| loony_placement::Candidate::new(node.node_id, v)),
                 );
             }
         }
@@ -134,7 +134,7 @@ impl ObjectService {
         &self,
         target: ShardTarget,
         data: Vec<u8>,
-    ) -> Result<s3_core::ShardReceipt, StorageError> {
+    ) -> Result<loony_core::ShardReceipt, StorageError> {
         let stream: ShardBytesIn =
             Box::pin(futures::stream::once(async move { Ok(Bytes::from(data)) }));
         self.shard_store.put_shard(target, stream).await
@@ -152,7 +152,7 @@ impl ObjectService {
         shard_bytes: Vec<Vec<u8>>,
     ) -> Result<Vec<ShardLocation>, S3Error> {
         let candidates = self.placement_candidates().await;
-        let plan = s3_placement::plan_write(
+        let plan = loony_placement::plan_write(
             object_id,
             version_id,
             stripe_index,
@@ -195,7 +195,7 @@ impl ObjectService {
 
         // Minted once, here, on the coordinator -- never inside a replicated apply()
         // the way `commit_manifest`'s embedded manifest already assumes (see
-        // `s3-metadata`'s `ResolvedCreateBucket` doc comment for why that distinction
+        // `loony-metadata`'s `ResolvedCreateBucket` doc comment for why that distinction
         // matters). Also doubles as the placement engine's stripe-key input.
         let object_id = ObjectId::new();
         let version_id = VersionId::new();
@@ -389,7 +389,7 @@ impl ObjectService {
         key: &ObjectKey,
         upload_id: UploadId,
         requesting_owner: OwnerId,
-    ) -> Result<s3_metadata::MultipartUploadState, S3Error> {
+    ) -> Result<loony_metadata::MultipartUploadState, S3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
         let state = self
             .metadata
@@ -602,7 +602,7 @@ impl ObjectService {
 
 /// Translates the multipart-specific [`MetaError`] variants (prompt §57's `NoSuchUpload`/
 /// `InvalidPart`/`InvalidPartOrder`) into their dedicated [`S3Error`] counterparts so
-/// `s3-api` maps them to the right HTTP status/code instead of a generic 500 — every
+/// `loony-api` maps them to the right HTTP status/code instead of a generic 500 — every
 /// other variant still falls through to the blanket `S3Error::Meta` conversion. Needed
 /// at each multipart metadata-store call past `authorized_upload`'s own check, since the
 /// upload can still be concurrently aborted/completed by another request in between.
@@ -700,8 +700,8 @@ async fn fetch_and_verify_shard(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use s3_metadata::{CreateBucket, RedbMetadataStore};
-    use s3_storage::LocalVolumeManager;
+    use loony_metadata::{CreateBucket, RedbMetadataStore};
+    use loony_storage::LocalVolumeManager;
 
     async fn service_with_volumes(volume_count: usize) -> (ObjectService, BucketName, OwnerId) {
         let meta_dir = tempfile::tempdir().unwrap();

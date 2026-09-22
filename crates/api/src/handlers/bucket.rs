@@ -3,8 +3,8 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
-use s3_core::BucketName;
-use s3_object::S3Error;
+use loony_core::BucketName;
+use loony_object::S3Error;
 
 use super::request_id;
 use crate::auth::AuthenticatedOwner;
@@ -119,7 +119,7 @@ pub async fn list_objects_v2(
         .objects
         .list_objects(
             &name,
-            s3_object::ListObjectsParams {
+            loony_object::ListObjectsParams {
                 prefix: params.prefix.clone(),
                 delimiter: params.delimiter.clone(),
                 start_after: params.start_after,

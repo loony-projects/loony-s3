@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use s3_core::{NodeId, ShardId, ShardTarget, VolumeId};
+use loony_core::{NodeId, ShardId, ShardTarget, VolumeId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {

@@ -1,5 +1,5 @@
 //! SigV4 canonicalization primitives (prompt §52). Kept free of any HTTP-framework
-//! types so it's testable in complete isolation from `s3-api`/axum.
+//! types so it's testable in complete isolation from `loony-api`/axum.
 
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};

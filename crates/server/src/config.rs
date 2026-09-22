@@ -7,7 +7,7 @@ use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
 
 use clap::Parser;
-use s3_core::NodeId;
+use loony_core::NodeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Mode {

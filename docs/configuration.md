@@ -1,6 +1,6 @@
 # Configuration reference
 
-Every setting `s3-server` accepts, as an environment variable and (where one exists) the
+Every setting `loony-server` accepts, as an environment variable and (where one exists) the
 equivalent CLI flag. CLI flags always win over their environment variable when both are
 given. See `crates/server/src/config.rs` for the authoritative source — this file mirrors
 it.
@@ -12,7 +12,7 @@ it.
 | `S3_MODE` | `--mode standalone\|cluster` | — | yes | Selects standalone vs. cluster mode. |
 | `S3_DATA_DIR` | — | — | yes | Root of this node's persistent state: `NODE_ID`, `meta.redb`, and (unless `S3_VOLUME_PATHS` is set) `volumes/vol-0`. |
 | `S3_BIND_ADDR` | — | `0.0.0.0:9000` | no | Where the public S3 API listens. |
-| `S3_ADMIN_ADDR` | — | `0.0.0.0:9001` | no | Reserved for an admin API. Parsed and logged at startup but **nothing is bound to it yet** — `s3-admin`/`s3-admin-cli` are stubs. |
+| `S3_ADMIN_ADDR` | — | `0.0.0.0:9001` | no | Reserved for an admin API. Parsed and logged at startup but **nothing is bound to it yet** — `loony-admin`/`loony-admin-cli` are stubs. |
 | `S3_REGION` | — | `us-east-1` | no | SigV4 region scope this server verifies requests against. Clients must match it. |
 | `S3_VOLUME_PATHS` | — | `<S3_DATA_DIR>/volumes/vol-0` | no | Comma-separated local volume directories. More volumes → a wider erasure-coding scheme becomes available (see [api-reference.md](api-reference.md)). |
 | `S3_NODE_ID` | `--node-id <uuid>` | auto-generated on first start | no | Pins this process to a specific persistent node identity. Must match what's already in `$S3_DATA_DIR/NODE_ID` if that file exists — the server refuses to start otherwise. |
@@ -51,9 +51,9 @@ source of truth for that node's data.
 
 ## Logging
 
-Currently fixed at `info` level, human-readable (not JSON) output — `s3-server`'s
+Currently fixed at `info` level, human-readable (not JSON) output — `loony-server`'s
 `main.rs` always calls `init_tracing(LoggingConfig::default())`. There is no environment
-variable to change this yet, even though the underlying `s3-observability::LoggingConfig`
+variable to change this yet, even though the underlying `loony-observability::LoggingConfig`
 type supports both a filter directive string and a JSON-output switch (it's just not
 wired to anything in `main` yet). If you need different log levels or JSON output today,
 edit that call site directly.

@@ -20,7 +20,7 @@
 //! upgrade without breaking older peers.
 //!
 //! **Peer addressing**: `node_id -> address` isn't tracked dynamically yet (that's
-//! `s3-cluster`'s job, Phase 7); [`NodeAddressResolver`] is the seam that plugs a real
+//! `loony-cluster`'s job, Phase 7); [`NodeAddressResolver`] is the seam that plugs a real
 //! membership-backed resolver in later without changing anything here.
 //!
 //! **Cluster protocol**: `join_cluster`/`fetch_members`/`fetch_health` (§40's
@@ -55,9 +55,9 @@ mod tests {
 
     use bytes::Bytes;
     use futures::StreamExt;
-    use s3_core::{ClusterId, NodeId, ShardTarget, VolumeId};
-    use s3_metadata::{MetadataStore, RedbMetadataStore};
-    use s3_storage::{LocalVolumeManager, ShardBytesIn, ShardStore};
+    use loony_core::{ClusterId, NodeId, ShardTarget, VolumeId};
+    use loony_metadata::{MetadataStore, RedbMetadataStore};
+    use loony_storage::{LocalVolumeManager, ShardBytesIn, ShardStore};
     use tokio::net::TcpListener;
 
     use super::*;
@@ -193,7 +193,7 @@ mod tests {
             volume_id: node_a.volume_id,
         };
         let err = client.put_shard(target, body(b"x")).await.unwrap_err();
-        assert!(matches!(err, s3_storage::StorageError::Remote(_, _)));
+        assert!(matches!(err, loony_storage::StorageError::Remote(_, _)));
     }
 
     #[tokio::test]
@@ -209,11 +209,11 @@ mod tests {
             volume_id: node_a.volume_id,
         };
         let err = client
-            .get_shard(target, s3_core::ShardId::new())
+            .get_shard(target, loony_core::ShardId::new())
             .await
             .map(|_| ())
             .unwrap_err();
-        assert!(matches!(err, s3_storage::StorageError::NotFound(_)));
+        assert!(matches!(err, loony_storage::StorageError::NotFound(_)));
     }
 
     #[tokio::test]
@@ -226,7 +226,7 @@ mod tests {
         };
 
         let err = client.put_shard(target, body(b"x")).await.unwrap_err();
-        assert!(matches!(err, s3_storage::StorageError::Unreachable(_, _)));
+        assert!(matches!(err, loony_storage::StorageError::Unreachable(_, _)));
     }
 
     #[tokio::test]

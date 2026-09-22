@@ -18,9 +18,9 @@ use futures::StreamExt;
 use subtle::ConstantTimeEq;
 
 use openraft::raft::{AppendEntriesRequest, InstallSnapshotRequest, VoteRequest};
-use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardTarget, VolumeId};
-use s3_metadata::{MetadataStore, Raft, RegisterNode};
-use s3_storage::{ShardBytesIn, ShardStore};
+use loony_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardTarget, VolumeId};
+use loony_metadata::{MetadataStore, Raft, RegisterNode};
+use loony_storage::{ShardBytesIn, ShardStore};
 
 use crate::PROTOCOL_VERSION;
 use crate::error::RpcServerError;
@@ -121,7 +121,7 @@ async fn join(
     if let Some(claimed) = &req.claimed_cluster_id
         && claimed != cluster_id.as_str()
     {
-        return Err(s3_metadata::MetaError::ClusterIdMismatch {
+        return Err(loony_metadata::MetaError::ClusterIdMismatch {
             existing: cluster_id.to_string(),
             requested: claimed.clone(),
         }
@@ -245,7 +245,7 @@ async fn stat_shard(
 async fn raft_append(
     State(state): State<RpcServerState>,
     headers: HeaderMap,
-    Json(req): Json<AppendEntriesRequest<s3_metadata::TypeConfig>>,
+    Json(req): Json<AppendEntriesRequest<loony_metadata::TypeConfig>>,
 ) -> Result<Response, RpcServerError> {
     check_token(&headers, &state.token)?;
     let raft = state.raft.as_ref().ok_or(RpcServerError::NotBootstrapped)?;
@@ -265,7 +265,7 @@ async fn raft_vote(
 async fn raft_snapshot(
     State(state): State<RpcServerState>,
     headers: HeaderMap,
-    Json(req): Json<InstallSnapshotRequest<s3_metadata::TypeConfig>>,
+    Json(req): Json<InstallSnapshotRequest<loony_metadata::TypeConfig>>,
 ) -> Result<Response, RpcServerError> {
     check_token(&headers, &state.token)?;
     let raft = state.raft.as_ref().ok_or(RpcServerError::NotBootstrapped)?;

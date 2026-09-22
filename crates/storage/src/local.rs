@@ -11,7 +11,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use s3_core::{NodeId, ShardId, ShardReceipt, ShardStat, ShardTarget, VolumeId};
+use loony_core::{NodeId, ShardId, ShardReceipt, ShardStat, ShardTarget, VolumeId};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 

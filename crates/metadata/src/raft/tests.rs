@@ -5,7 +5,7 @@
 //! 3-node integration test in `crates/rpc/tests/raft_cluster.rs`, which needs the real
 //! HTTP network transport this crate deliberately doesn't depend on.
 
-use s3_core::{BucketName, ClusterId, NodeId, NodeState, OwnerId};
+use loony_core::{BucketName, ClusterId, NodeId, NodeState, OwnerId};
 
 use crate::commands::CreateBucket;
 use crate::raft::RaftMetadataStore;

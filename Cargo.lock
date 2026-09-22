@@ -1096,6 +1096,223 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "loony-admin"
+version = "0.1.0"
+
+[[package]]
+name = "loony-admin-cli"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
+name = "loony-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures",
+ "http",
+ "http-body-util",
+ "loony-auth",
+ "loony-core",
+ "loony-metadata",
+ "loony-object",
+ "loony-observability",
+ "loony-storage",
+ "quick-xml",
+ "serde",
+ "sha2",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "loony-auth"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hmac",
+ "loony-core",
+ "loony-metadata",
+ "sha2",
+ "subtle",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "loony-cluster"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "loony-core",
+ "loony-metadata",
+ "loony-rpc",
+ "reqwest",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "loony-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "loony-erasure"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.8",
+ "reed-solomon-simd",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "loony-healing"
+version = "0.1.0"
+
+[[package]]
+name = "loony-metadata"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "loony-core",
+ "md-5",
+ "openraft",
+ "redb",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "loony-object"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "loony-core",
+ "loony-erasure",
+ "loony-metadata",
+ "loony-placement",
+ "loony-storage",
+ "md-5",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "loony-observability"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "loony-placement"
+version = "0.1.0"
+dependencies = [
+ "loony-core",
+ "sha2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "loony-rpc"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "futures",
+ "loony-core",
+ "loony-metadata",
+ "loony-storage",
+ "openraft",
+ "reqwest",
+ "serde",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "loony-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "dotenvy",
+ "loony-api",
+ "loony-cluster",
+ "loony-core",
+ "loony-metadata",
+ "loony-object",
+ "loony-observability",
+ "loony-rpc",
+ "loony-storage",
+ "openraft",
+ "sha2",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "loony-storage"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "loony-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "maplit"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1814,223 +2031,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "s3-admin"
-version = "0.1.0"
-
-[[package]]
-name = "s3-admin-cli"
-version = "0.1.0"
-dependencies = [
- "tokio",
-]
-
-[[package]]
-name = "s3-api"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "futures",
- "http",
- "http-body-util",
- "quick-xml",
- "s3-auth",
- "s3-core",
- "s3-metadata",
- "s3-object",
- "s3-observability",
- "s3-storage",
- "serde",
- "sha2",
- "tempfile",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "s3-auth"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "hmac",
- "s3-core",
- "s3-metadata",
- "sha2",
- "subtle",
- "thiserror 2.0.20",
- "time",
- "tokio",
-]
-
-[[package]]
-name = "s3-cluster"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "reqwest",
- "s3-core",
- "s3-metadata",
- "s3-rpc",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "s3-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "time",
- "uuid",
-]
-
-[[package]]
-name = "s3-erasure"
-version = "0.1.0"
-dependencies = [
- "rand 0.8.8",
- "reed-solomon-simd",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "s3-healing"
-version = "0.1.0"
-
-[[package]]
-name = "s3-metadata"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "md-5",
- "openraft",
- "redb",
- "s3-core",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "s3-object"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures",
- "md-5",
- "s3-core",
- "s3-erasure",
- "s3-metadata",
- "s3-placement",
- "s3-storage",
- "sha2",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
-]
-
-[[package]]
-name = "s3-observability"
-version = "0.1.0"
-dependencies = [
- "http",
- "metrics",
- "metrics-exporter-prometheus",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "s3-placement"
-version = "0.1.0"
-dependencies = [
- "s3-core",
- "sha2",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "s3-rpc"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "futures",
- "openraft",
- "reqwest",
- "s3-core",
- "s3-metadata",
- "s3-storage",
- "serde",
- "subtle",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "s3-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "dotenvy",
- "openraft",
- "s3-api",
- "s3-cluster",
- "s3-core",
- "s3-metadata",
- "s3-object",
- "s3-observability",
- "s3-rpc",
- "s3-storage",
- "sha2",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "s3-storage"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "s3-core",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tokio-util",
-]
 
 [[package]]
 name = "schannel"

@@ -10,7 +10,7 @@ use crate::canonical::{
     parse_query_string, sha256_hex,
 };
 use crate::credential::CredentialProvider;
-use s3_core::OwnerId;
+use loony_core::OwnerId;
 
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 const SERVICE: &str = "s3";
@@ -46,7 +46,7 @@ pub struct VerifiedRequest {
 }
 
 /// The pieces of an HTTP request SigV4 verification needs. Framework-agnostic on
-/// purpose: `s3-api` is the only crate that knows how to pull these out of an axum
+/// purpose: `loony-api` is the only crate that knows how to pull these out of an axum
 /// `Request`.
 pub struct RequestParts<'a> {
     pub method: &'a str,
@@ -372,7 +372,7 @@ async fn verify_presigned(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use s3_core::OwnerId;
+    use loony_core::OwnerId;
     use std::sync::Mutex;
     use time::macros::datetime;
 

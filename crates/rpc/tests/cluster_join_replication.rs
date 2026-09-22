@@ -10,10 +10,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use s3_core::{BucketName, ClusterId, NodeId, ObjectKey, OwnerId};
-use s3_metadata::{CreateBucket, MetadataStore, RaftMetadataStore};
-use s3_rpc::{HttpRaftNetworkFactory, JoinRequest, RpcServerState, join_cluster};
-use s3_storage::LocalVolumeManager;
+use loony_core::{BucketName, ClusterId, NodeId, ObjectKey, OwnerId};
+use loony_metadata::{CreateBucket, MetadataStore, RaftMetadataStore};
+use loony_rpc::{HttpRaftNetworkFactory, JoinRequest, RpcServerState, join_cluster};
+use loony_storage::LocalVolumeManager;
 use tokio::net::TcpListener;
 
 const TOKEN: &str = "join-replication-test-token";
@@ -51,7 +51,7 @@ async fn spawn_node() -> Node {
         token: TOKEN.to_string(),
         raft: Some(store.raft().clone()),
     };
-    let router = s3_rpc::build_router(state);
+    let router = loony_rpc::build_router(state);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -110,13 +110,13 @@ async fn a_node_joined_via_the_real_join_rpc_replicates_existing_and_future_buck
     // a fully-built `ObjectManifest`) replicated to a bucket_id the learner's own
     // bucket table didn't have. `bucket_exists`, which looks up by *name*, wouldn't
     // have caught that -- only an id-aware check does.
-    let manifest = s3_core::ObjectManifest {
-        object_id: s3_core::ObjectId::new(),
+    let manifest = loony_core::ObjectManifest {
+        object_id: loony_core::ObjectId::new(),
         bucket_id: bucket.bucket_id,
         key: ObjectKey::parse("pre-join-key").unwrap(),
-        version_id: s3_core::VersionId::new(),
+        version_id: loony_core::VersionId::new(),
         size: 3,
-        etag: s3_core::ETag::from_md5([9u8; 16]),
+        etag: loony_core::ETag::from_md5([9u8; 16]),
         sha256: [7u8; 32],
         content_type: "application/octet-stream".into(),
         user_metadata: Default::default(),
@@ -270,7 +270,7 @@ async fn joining_with_a_mismatched_cluster_id_does_not_add_a_learner() {
     .unwrap_err();
     assert!(matches!(
         err,
-        s3_rpc::RpcClientError::Remote { status: 409, .. }
+        loony_rpc::RpcClientError::Remote { status: 409, .. }
     ));
 
     // Rejected before add_learner ever ran: node 1's membership is still just itself.

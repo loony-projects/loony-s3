@@ -1,7 +1,7 @@
 //! SigV4 middleware: every request must carry a valid `Authorization` header or
 //! presigned-URL signature before it reaches a handler (prompt §52-53). On success, the
 //! resolved owner is inserted into the request's extensions as [`AuthenticatedOwner`]
-//! for handlers to use; `s3-object`'s ownership checks are the authorization half
+//! for handlers to use; `loony-object`'s ownership checks are the authorization half
 //! (architecture.md §55) — this middleware only answers "who are you?".
 
 use axum::body::Body;
@@ -11,8 +11,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use time::{Duration, OffsetDateTime};
 
-use s3_auth::{RequestParts, verify};
-use s3_core::OwnerId;
+use loony_auth::{RequestParts, verify};
+use loony_core::OwnerId;
 
 use crate::error::auth_error_response;
 use crate::handlers::request_id;

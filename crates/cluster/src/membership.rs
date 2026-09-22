@@ -3,7 +3,7 @@
 //! implementation.
 
 use async_trait::async_trait;
-use s3_core::{NodeId, NodeInfo, NodeState};
+use loony_core::{NodeId, NodeInfo, NodeState};
 
 use crate::error::ClusterError;
 

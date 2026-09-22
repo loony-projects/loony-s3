@@ -1,7 +1,7 @@
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use s3_auth::AuthError;
-use s3_object::S3Error;
+use loony_auth::AuthError;
+use loony_object::S3Error;
 
 use crate::xml;
 

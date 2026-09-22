@@ -1,7 +1,7 @@
 //! `HttpRaftNetworkFactory`: the real, cross-process [`RaftNetworkFactory`] used once a
 //! Raft group has more than one voter (Phase 8) — reuses this crate's existing
 //! bearer-token-authenticated HTTP transport (`server.rs`/`client.rs`, Phase 6) rather
-//! than inventing a second one. `s3_metadata::NoopNetworkFactory` covers the
+//! than inventing a second one. `loony_metadata::NoopNetworkFactory` covers the
 //! single-voter case, which never needs to reach a peer at all.
 //!
 //! Unlike [`RemoteShardStore`](crate::RemoteShardStore), this doesn't need a
@@ -17,8 +17,8 @@ use openraft::raft::{
     VoteResponse,
 };
 use openraft::BasicNode;
-use s3_core::NodeId;
-use s3_metadata::TypeConfig;
+use loony_core::NodeId;
+use loony_metadata::TypeConfig;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 

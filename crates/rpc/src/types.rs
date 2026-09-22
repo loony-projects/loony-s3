@@ -1,9 +1,9 @@
 //! Wire types shared between the RPC client and server for cluster operations
 //! (`ClusterJoin`, `Health` — prompt §40). Shard operations don't need DTOs of their
-//! own: `s3_core::ShardReceipt`/`ShardStat` already derive `Serialize`/`Deserialize`
+//! own: `loony_core::ShardReceipt`/`ShardStat` already derive `Serialize`/`Deserialize`
 //! and are used directly as JSON bodies.
 
-use s3_core::{NodeId, NodeInfo, VolumeId};
+use loony_core::{NodeId, NodeInfo, VolumeId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

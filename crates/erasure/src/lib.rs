@@ -1,5 +1,5 @@
 //! `ErasureCodec` trait wrapping `reed-solomon-simd` for stripe encode/reconstruct
-//! (architecture.md §8). Pure computation, no I/O — `s3-object`'s durability layer
+//! (architecture.md §8). Pure computation, no I/O — `loony-object`'s durability layer
 //! drives this and does the actual shard reads/writes.
 //!
 //! **Why `reed-solomon-simd` over `reed-solomon-erasure`:** pure Rust with runtime

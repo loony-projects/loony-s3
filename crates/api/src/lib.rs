@@ -1,5 +1,5 @@
 //! Thin Axum HTTP layer: S3 REST routes, XML (de)serialization, S3 error-code mapping.
-//! Delegates all business logic to `s3-object` (architecture.md §1) — handlers here do
+//! Delegates all business logic to `loony-object` (architecture.md §1) — handlers here do
 //! request parsing and response shaping only.
 //!
 //! Phase 3/4 scope (prompt's own phase boundaries): CreateBucket, DeleteBucket,
@@ -25,7 +25,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::request_id::{PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
-use s3_observability::UuidV7RequestId;
+use loony_observability::UuidV7RequestId;
 
 pub use state::AppState;
 

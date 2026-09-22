@@ -5,11 +5,11 @@
 //! satisfies it, with no adapter boilerplate at the call site.
 
 use async_trait::async_trait;
-use s3_core::OwnerId;
-use s3_metadata::MetadataStore;
+use loony_core::OwnerId;
+use loony_metadata::MetadataStore;
 
 /// What SigV4 verification needs about one credential. Deliberately not the full
-/// `s3_metadata::Credential` record (no `access_key`/`created_at` here) — this is the
+/// `loony_metadata::Credential` record (no `access_key`/`created_at` here) — this is the
 /// minimal shape the signing-key derivation and the enabled/owner checks require.
 #[derive(Debug, Clone)]
 pub struct SigningCredential {

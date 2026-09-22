@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use s3_core::{IdParseError, NodeId};
+use loony_core::{IdParseError, NodeId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum NodeIdentityError {

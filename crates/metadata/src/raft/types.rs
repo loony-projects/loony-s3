@@ -1,7 +1,7 @@
 //! The `openraft` type configuration (Phase 8, architecture.md §5): the shapes that
 //! flow through the Raft log, and the state-machine's application-level response.
 //!
-//! `NodeId` is `s3_core::NodeId` directly — it already has every derive `openraft`
+//! `NodeId` is `loony_core::NodeId` directly — it already has every derive `openraft`
 //! requires (architecture.md §34: node identity is minted once and persisted, never
 //! derived from a network address, which is exactly the property a Raft voter id
 //! needs). `Node` is `openraft::BasicNode`, which is exactly "an advertised address"
@@ -9,7 +9,7 @@
 
 use std::io::Cursor;
 
-use s3_core::{
+use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
     ObjectManifest, PartManifest, UploadId, VersionId,
 };

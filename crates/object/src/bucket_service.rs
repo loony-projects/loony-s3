@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use s3_core::{Bucket, BucketName, OwnerId};
-use s3_metadata::{CreateBucket, MetaError, MetadataStore};
+use loony_core::{Bucket, BucketName, OwnerId};
+use loony_metadata::{CreateBucket, MetaError, MetadataStore};
 
 use crate::error::S3Error;
 
@@ -9,7 +9,7 @@ use crate::error::S3Error;
 /// ListBuckets, translating [`MetaError`] into the S3-shaped [`S3Error`] the API layer
 /// expects, and enforcing ownership-based authorization (architecture.md §55: initial
 /// release is ownership/root-style — a request may only act on a bucket it owns).
-/// Contains no HTTP concerns — `s3-api`'s handlers are the only thing that knows this
+/// Contains no HTTP concerns — `loony-api`'s handlers are the only thing that knows this
 /// exists.
 pub struct BucketService {
     metadata: Arc<dyn MetadataStore>,
@@ -82,7 +82,7 @@ impl BucketService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use s3_metadata::RedbMetadataStore;
+    use loony_metadata::RedbMetadataStore;
 
     async fn service() -> BucketService {
         let dir = tempfile::tempdir().unwrap();

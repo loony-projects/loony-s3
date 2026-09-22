@@ -1,23 +1,23 @@
 [package]
-name = "s3-server"
+name = "loony-server"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "s3-server"
+name = "loony-server"
 path = "src/main.rs"
 
 [dependencies]
-s3-core = { path = "../core" }
-s3-cluster = { path = "../cluster" }
-s3-storage = { path = "../storage" }
-s3-observability = { path = "../observability" }
-s3-metadata = { path = "../metadata" }
-s3-object = { path = "../object" }
-s3-api = { path = "../api" }
-s3-rpc = { path = "../rpc" }
+loony-core = { path = "../core" }
+loony-cluster = { path = "../cluster" }
+loony-storage = { path = "../storage" }
+loony-observability = { path = "../observability" }
+loony-metadata = { path = "../metadata" }
+loony-object = { path = "../object" }
+loony-api = { path = "../api" }
+loony-rpc = { path = "../rpc" }
 tokio.workspace = true
 clap.workspace = true
 dotenvy.workspace = true

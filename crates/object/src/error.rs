@@ -1,9 +1,9 @@
-use s3_metadata::MetaError;
-use s3_storage::StorageError;
+use loony_metadata::MetaError;
+use loony_storage::StorageError;
 
 /// Unified error type for the Object Service. Deliberately mirrors S3's own error
 /// vocabulary (prompt §57) rather than leaking `MetaError`/`StorageError` variants
-/// directly, so `s3-api` can map each one to the right HTTP status + XML code without
+/// directly, so `loony-api` can map each one to the right HTTP status + XML code without
 /// string-matching messages.
 #[derive(Debug, thiserror::Error)]
 pub enum S3Error {

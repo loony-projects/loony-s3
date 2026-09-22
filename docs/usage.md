@@ -11,10 +11,10 @@ running more than one node, see [`cluster.md`](cluster.md).
 
 ```bash
 cargo build --release
-# binary at target/release/s3-server
+# binary at target/release/loony-server
 ```
 
-A debug build (`cargo build`, binary at `target/debug/s3-server`) is fine for local use
+A debug build (`cargo build`, binary at `target/debug/loony-server`) is fine for local use
 and is what the examples below use.
 
 ## Run standalone
@@ -24,7 +24,7 @@ Two environment variables are required; everything else has a sane default.
 ```bash
 S3_MODE=standalone \
 S3_DATA_DIR=/tmp/loony-dev \
-cargo run --bin s3-server
+cargo run --bin loony-server
 ```
 
 On first start, the server:
@@ -165,7 +165,7 @@ than one volume path:
 S3_MODE=standalone \
 S3_DATA_DIR=/tmp/loony-dev \
 S3_VOLUME_PATHS=/tmp/loony-dev/vol-a,/tmp/loony-dev/vol-b,/tmp/loony-dev/vol-c \
-cargo run --bin s3-server
+cargo run --bin loony-server
 ```
 
 ## Running more than one node

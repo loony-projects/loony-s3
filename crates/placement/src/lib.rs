@@ -1,7 +1,7 @@
 //! Placement engine (architecture.md §10): rendezvous hashing (HRW — Highest Random
 //! Weight) over the cluster's healthy `(node_id, volume_id)` candidates, used to choose
 //! where each shard of a stripe should be written. Pure computation, no I/O — callers
-//! (`s3-object`) gather the candidate list from the (already-replicated) node registry
+//! (`loony-object`) gather the candidate list from the (already-replicated) node registry
 //! and hand it in.
 //!
 //! **Why HRW over consistent hashing with vnodes**: no persisted ring state. The same
@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 
-use s3_core::{NodeId, ObjectId, VersionId, VolumeId};
+use loony_core::{NodeId, ObjectId, VersionId, VolumeId};
 use sha2::{Digest, Sha256};
 
 /// One writable `(node, volume)` the placement engine may choose — only `HEALTHY`

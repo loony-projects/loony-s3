@@ -1,8 +1,8 @@
 //! Phase 9: a [`ShardStore`] that routes each call to local disk or a remote node over
-//! RPC based on the target's `node_id` — the piece that lets `s3-object`'s PUT/GET
+//! RPC based on the target's `node_id` — the piece that lets `loony-object`'s PUT/GET
 //! treat "shard lives on this node" and "shard lives on some other node" identically,
 //! the way `RemoteShardStore`'s own doc comment always intended once something above it
-//! actually chose remote targets (Phase 6). Nothing in `s3-object` needed to change for
+//! actually chose remote targets (Phase 6). Nothing in `loony-object` needed to change for
 //! GET to become cluster-aware — it already built a [`ShardTarget`] from whatever
 //! `node_id`/`volume_id` the manifest recorded; only PUT's placement decision and this
 //! dispatcher were missing.
@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardStat, ShardTarget};
-use s3_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
+use loony_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardStat, ShardTarget};
+use loony_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
 
 use crate::client::{NodeAddressResolver, RemoteShardStore};
 
@@ -20,7 +20,7 @@ use crate::client::{NodeAddressResolver, RemoteShardStore};
 /// (Raft-replicated, as of Phase 8) node registry, rather than a fixed map. `resolve()`
 /// itself stays synchronous and I/O-free — `refresh()` is what does the actual
 /// `MetadataStore::list_nodes()` call, meant to be driven by a background task the same
-/// way `s3_cluster::run_heartbeat_loop` already drives failure detection.
+/// way `loony_cluster::run_heartbeat_loop` already drives failure detection.
 #[derive(Clone, Default)]
 pub struct CachedNodeResolver {
     addresses: Arc<RwLock<HashMap<NodeId, String>>>,

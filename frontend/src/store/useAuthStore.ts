@@ -23,6 +23,6 @@ export const useAuthStore = create<AuthState>()(
         set({ accessKey, secretKey, region, endpoint, isAuthenticated: true }),
       logout: () => set({ accessKey: null, secretKey: null, region: null, endpoint: null, isAuthenticated: false }),
     }),
-    { name: 'loony-s3-auth' },
+    { name: 'loony-auth' },
   ),
 );

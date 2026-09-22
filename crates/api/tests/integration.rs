@@ -1,7 +1,7 @@
 //! End-to-end tests against the real Axum router (no mocked handlers) — the same
-//! `Router` `s3-server` mounts, driven with `tower::ServiceExt::oneshot` rather than a
+//! `Router` `loony-server` mounts, driven with `tower::ServiceExt::oneshot` rather than a
 //! bound TCP socket so the tests stay fast and hermetic. Every request is signed with
-//! real SigV4 (via `s3_auth::sign_header_auth`) against a credential seeded into the
+//! real SigV4 (via `loony_auth::sign_header_auth`) against a credential seeded into the
 //! metadata store, exercising the same auth path a real client hits.
 
 use std::sync::Arc;
@@ -13,11 +13,11 @@ use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
-use s3_api::{AppState, build_router};
-use s3_core::{NodeId, OwnerId, VolumeId};
-use s3_metadata::{Credential, MetadataStore, RedbMetadataStore};
-use s3_object::{BucketService, ObjectService};
-use s3_storage::LocalVolumeManager;
+use loony_api::{AppState, build_router};
+use loony_core::{NodeId, OwnerId, VolumeId};
+use loony_metadata::{Credential, MetadataStore, RedbMetadataStore};
+use loony_object::{BucketService, ObjectService};
+use loony_storage::LocalVolumeManager;
 
 const ACCESS_KEY: &str = "AKIATESTACCESSKEY";
 const SECRET_KEY: &str = "test-secret-key-do-not-use-in-prod";
@@ -82,7 +82,7 @@ fn signed_request_with(
     body: Vec<u8>,
 ) -> Request<Body> {
     let payload_hash = sha256_hex(&body);
-    let amz_date = s3_auth::amz_date_now();
+    let amz_date = loony_auth::amz_date_now();
     let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
 
     let headers = vec![
@@ -96,7 +96,7 @@ fn signed_request_with(
         "x-amz-date".to_string(),
     ];
 
-    let authorization = s3_auth::sign_header_auth(
+    let authorization = loony_auth::sign_header_auth(
         method,
         path,
         query,
@@ -128,7 +128,7 @@ fn sha256_hex(data: &[u8]) -> String {
 /// payload hash, mint `x-amz-date`, sign, attach `Authorization`.
 fn signed_request(method: &str, uri: &str, body: Vec<u8>) -> Request<Body> {
     let payload_hash = sha256_hex(&body);
-    let amz_date = s3_auth::amz_date_now();
+    let amz_date = loony_auth::amz_date_now();
     let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
 
     let headers = vec![
@@ -142,7 +142,7 @@ fn signed_request(method: &str, uri: &str, body: Vec<u8>) -> Request<Body> {
         "x-amz-date".to_string(),
     ];
 
-    let authorization = s3_auth::sign_header_auth(
+    let authorization = loony_auth::sign_header_auth(
         method,
         path,
         query,
@@ -195,7 +195,7 @@ async fn unsigned_requests_are_rejected() {
 async fn a_wrong_secret_is_rejected() {
     let app = test_app().await;
     let payload_hash = sha256_hex(b"");
-    let amz_date = s3_auth::amz_date_now();
+    let amz_date = loony_auth::amz_date_now();
     let headers = vec![
         ("host".to_string(), "localhost".to_string()),
         ("x-amz-date".to_string(), amz_date.clone()),
@@ -206,7 +206,7 @@ async fn a_wrong_secret_is_rejected() {
         "x-amz-content-sha256".to_string(),
         "x-amz-date".to_string(),
     ];
-    let bad_auth = s3_auth::sign_header_auth(
+    let bad_auth = loony_auth::sign_header_auth(
         "GET",
         "/",
         "",
@@ -590,9 +590,9 @@ async fn a_valid_presigned_url_grants_access_without_an_authorization_header() {
         .await
         .unwrap();
 
-    let amz_date = s3_auth::amz_date_now();
+    let amz_date = loony_auth::amz_date_now();
     let headers = vec![("host".to_string(), "localhost".to_string())];
-    let query = s3_auth::sign_presigned_query(
+    let query = loony_auth::sign_presigned_query(
         "GET",
         "/presign-bucket/k",
         &headers,

@@ -4,8 +4,8 @@
 //! these are built directly — simpler to get right and to keep matching AWS's exact
 //! shape than fighting a serde adapter meant for more regular documents.
 
-use s3_core::{Bucket, ETag, OwnerId, UploadId};
-use s3_metadata::{ListObjectsPage, ObjectSummary, PartSummary};
+use loony_core::{Bucket, ETag, OwnerId, UploadId};
+use loony_metadata::{ListObjectsPage, ObjectSummary, PartSummary};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

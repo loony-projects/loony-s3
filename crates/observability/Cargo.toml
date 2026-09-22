@@ -1,5 +1,5 @@
 [package]
-name = "s3-observability"
+name = "loony-observability"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true

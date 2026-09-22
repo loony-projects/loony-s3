@@ -15,13 +15,13 @@ Bootstrap the first node, then have others join it. Each node needs its own
 S3_CLUSTER_TOKEN=shared-secret S3_MODE=cluster S3_CLUSTER_ID=my-cluster \
   S3_DATA_DIR=/tmp/loony-node1 S3_BIND_ADDR=127.0.0.1:9000 \
   S3_CLUSTER_ADDR=127.0.0.1:9100 S3_ADVERTISE_ADDR=127.0.0.1:9100 \
-  cargo run --bin s3-server -- --mode cluster --bootstrap
+  cargo run --bin loony-server -- --mode cluster --bootstrap
 
 # Node 2: join through node 1
 S3_CLUSTER_TOKEN=shared-secret S3_MODE=cluster \
   S3_DATA_DIR=/tmp/loony-node2 S3_BIND_ADDR=127.0.0.1:9001 \
   S3_CLUSTER_ADDR=127.0.0.1:9101 S3_ADVERTISE_ADDR=127.0.0.1:9101 \
-  cargo run --bin s3-server -- --mode cluster --join 127.0.0.1:9100
+  cargo run --bin loony-server -- --mode cluster --join 127.0.0.1:9100
 ```
 
 `S3_ADVERTISE_ADDR` is what gets told to *other* nodes — it has to be reachable from
@@ -55,7 +55,7 @@ distributed right now:
   its own independent single-voter group — so a bucket created on node 1, including
   ones that existed *before* node 2 ever joined, is visible via `ListBuckets`/
   `ListObjectsV2`/`HeadObject` on node 2 too. Verified against real, separate
-  `s3-server` processes, not just in-process tests
+  `loony-server` processes, not just in-process tests
   (`crates/rpc/tests/cluster_join_replication.rs` covers the same scenario
   automatically). This closes the gap this doc used to describe as "a bucket created on
   node 1 is invisible on node 2."
@@ -71,7 +71,7 @@ distributed right now:
   machine requires.
 
 - **Shard bytes now genuinely spread across nodes and are fetchable through any of
-  them (Phase 9).** `ObjectService` places each stripe's shards with `s3-placement`, a
+  them (Phase 9).** `ObjectService` places each stripe's shards with `loony-placement`, a
   rendezvous-hashing (HRW) engine following architecture.md §10: every candidate
   `(node, volume)` pair across all `Healthy` cluster members is scored from a hash of
   the stripe's identity and the candidate, and the top-scoring distinct nodes are
@@ -83,7 +83,7 @@ distributed right now:
   to local disk or, over the existing internal RPC transport (`RemoteShardStore`,
   Phase 6), to whichever node actually holds it — resolved via a `CachedNodeResolver`
   that refreshes from `MetadataStore::list_nodes()` every 5 seconds. Verified against
-  two real, separate `s3-server` processes with the AWS CLI: a multi-megabyte PUT
+  two real, separate `loony-server` processes with the AWS CLI: a multi-megabyte PUT
   issued against node 1 leaves shard files on *both* nodes' local disks, and `GET` of
   that object issued against *either* node returns byte-identical data (checked with
   `sha256sum` against the source file in both directions).

@@ -3,7 +3,7 @@
 //! `RaftMetadataStore` behind a real `axum` server on a real (loopback) TCP port,
 //! talking over the actual bearer-token-authenticated HTTP transport
 //! (`HttpRaftNetworkFactory`/the `raft_append`/`raft_vote`/`raft_snapshot` routes) —
-//! not an in-process shortcut. This is the multi-voter case `s3-metadata`'s own
+//! not an in-process shortcut. This is the multi-voter case `loony-metadata`'s own
 //! single-node tests can't exercise, since they deliberately don't depend on this
 //! crate's network layer.
 
@@ -13,10 +13,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openraft::BasicNode;
-use s3_core::{BucketName, NodeId, OwnerId};
-use s3_metadata::{CreateBucket, MetaError, MetadataStore, RaftMetadataStore};
-use s3_rpc::{HttpRaftNetworkFactory, RpcServerState};
-use s3_storage::LocalVolumeManager;
+use loony_core::{BucketName, NodeId, OwnerId};
+use loony_metadata::{CreateBucket, MetaError, MetadataStore, RaftMetadataStore};
+use loony_rpc::{HttpRaftNetworkFactory, RpcServerState};
+use loony_storage::LocalVolumeManager;
 use tokio::net::TcpListener;
 
 const TOKEN: &str = "raft-cluster-test-token";
@@ -43,7 +43,7 @@ async fn reserve_addr() -> SocketAddr {
 }
 
 async fn serve(state: RpcServerState, addr: SocketAddr) -> tokio::task::JoinHandle<()> {
-    let router = s3_rpc::build_router(state);
+    let router = loony_rpc::build_router(state);
     let listener = TcpListener::bind(addr).await.unwrap();
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;

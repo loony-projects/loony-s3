@@ -16,7 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use openraft::{BasicNode, Config, Raft};
 use redb::Database;
-use s3_core::{
+use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
     ObjectManifest, OwnerId, PartManifest, UploadId, VersionId,
 };

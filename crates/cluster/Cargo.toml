@@ -1,14 +1,14 @@
 [package]
-name = "s3-cluster"
+name = "loony-cluster"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
-s3-core = { path = "../core" }
-s3-metadata = { path = "../metadata" }
-s3-rpc = { path = "../rpc" }
+loony-core = { path = "../core" }
+loony-metadata = { path = "../metadata" }
+loony-rpc = { path = "../rpc" }
 tokio.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true

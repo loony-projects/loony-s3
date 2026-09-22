@@ -1,6 +1,6 @@
 //! SigV4 request verification, presigned URL validation, and the credential lookup
 //! trait. Authentication only ("who are you?") — authorization ("may you do this?") is
-//! `s3-object`'s concern (architecture.md §55). See docs/architecture.md §24.
+//! `loony-object`'s concern (architecture.md §55). See docs/architecture.md §24.
 
 mod canonical;
 mod credential;

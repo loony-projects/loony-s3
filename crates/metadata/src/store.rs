@@ -4,7 +4,7 @@
 //! land; this phase covers what Phase 3 (Standalone S3) needs.
 
 use async_trait::async_trait;
-use s3_core::{
+use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectKey,
     ObjectManifest, OwnerId, UploadId,
 };
@@ -14,7 +14,7 @@ use crate::commands::{
     MultipartUploadState, PartSummary, RegisterNode,
 };
 use crate::error::MetaError;
-use s3_core::PartManifest;
+use loony_core::PartManifest;
 
 #[async_trait]
 pub trait MetadataStore: Send + Sync {

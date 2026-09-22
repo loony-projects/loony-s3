@@ -10,7 +10,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use s3_core::{ShardId, ShardReceipt, ShardStat, ShardTarget};
+use loony_core::{ShardId, ShardReceipt, ShardStat, ShardTarget};
 
 use crate::error::StorageError;
 

@@ -1,5 +1,5 @@
 //! `ClusterMembership` trait: node registry, heartbeat-based failure-detection hints,
-//! and the authoritative state-transition path via `s3-metadata` Raft commands.
+//! and the authoritative state-transition path via `loony-metadata` Raft commands.
 //! Bootstrap/join procedure. See docs/architecture.md sections 17-18, and
 //! `service.rs`'s module docs for exactly what "authoritative" means before Phase 8's
 //! real multi-voter Raft exists.

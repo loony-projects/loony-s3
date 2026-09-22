@@ -1,17 +1,17 @@
 [package]
-name = "s3-api"
+name = "loony-api"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
-s3-core = { path = "../core" }
-s3-object = { path = "../object" }
-s3-observability = { path = "../observability" }
-s3-metadata = { path = "../metadata" }
-s3-storage = { path = "../storage" }
-s3-auth = { path = "../auth" }
+loony-core = { path = "../core" }
+loony-object = { path = "../object" }
+loony-observability = { path = "../observability" }
+loony-metadata = { path = "../metadata" }
+loony-storage = { path = "../storage" }
+loony-auth = { path = "../auth" }
 axum.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["request-id", "trace", "cors"] }

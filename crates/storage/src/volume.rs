@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use s3_core::{NodeId, VolumeId};
+use loony_core::{NodeId, VolumeId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 

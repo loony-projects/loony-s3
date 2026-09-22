@@ -1,5 +1,5 @@
 [package]
-name = "s3-erasure"
+name = "loony-erasure"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true

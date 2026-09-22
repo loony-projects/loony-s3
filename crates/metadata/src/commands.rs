@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use s3_core::{
+use loony_core::{
     BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId, VolumeId,
 };
 use time::OffsetDateTime;

@@ -1,6 +1,6 @@
 //! The internal RPC client: a [`ShardStore`] implementation that dispatches to a
 //! *remote* node over HTTP instead of the local disk. Combined with
-//! `s3-storage`'s `LocalVolumeManager`, this is the "local vs remote" split
+//! `loony-storage`'s `LocalVolumeManager`, this is the "local vs remote" split
 //! architecture.md §2 describes — nothing above the `ShardStore` trait needs to know
 //! which one it's talking to.
 
@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use s3_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardStat, ShardTarget};
-use s3_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
+use loony_core::{NodeId, NodeInfo, ShardId, ShardReceipt, ShardStat, ShardTarget};
+use loony_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
 
 use crate::types::{HealthInfo, JoinRequest, JoinResponse};
 
@@ -114,7 +114,7 @@ async fn parse_json_response<T: serde::de::DeserializeOwned>(
 
 /// Maps a node's persistent identity to the base URL of its internal RPC server.
 /// Phase 6 scope: nothing here yet tracks cluster membership dynamically (that's
-/// `s3-cluster`'s job from Phase 7 on) — [`StaticResolver`] below is a fixed map,
+/// `loony-cluster`'s job from Phase 7 on) — [`StaticResolver`] below is a fixed map,
 /// useful for tests and any deployment that configures peers by hand.
 pub trait NodeAddressResolver: Send + Sync {
     fn resolve(&self, node_id: NodeId) -> Option<String>;

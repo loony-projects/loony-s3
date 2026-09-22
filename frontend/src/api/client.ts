@@ -44,7 +44,7 @@ export interface SignedRequestOptions {
 /**
  * Signs and sends one S3 request. Returns the raw `Response` -- callers parse XML,
  * read headers, or stream the body as appropriate for that endpoint, the same
- * separation of concerns `s3-api`'s handlers keep on the server side.
+ * separation of concerns `loony-api`'s handlers keep on the server side.
  */
 export async function signedFetch(method: string, path: string, opts: SignedRequestOptions = {}): Promise<Response> {
   const creds = opts.credentials ?? getCredentials();

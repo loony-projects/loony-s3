@@ -22,8 +22,8 @@ const VOTE_KEY: &str = "vote";
 const LAST_PURGED: TableDefinition<&str, &[u8]> = TableDefinition::new("raft_last_purged");
 const LAST_PURGED_KEY: &str = "last_purged";
 
-type LogId = openraft::LogId<s3_core::NodeId>;
-type Vote = openraft::Vote<s3_core::NodeId>;
+type LogId = openraft::LogId<loony_core::NodeId>;
+type Vote = openraft::Vote<loony_core::NodeId>;
 type Entry = openraft::Entry<TypeConfig>;
 
 /// Cheaply `Clone` (an `Arc<Database>` handle), matching `RedbStateMachineStore` and the
@@ -73,15 +73,15 @@ impl openraft::storage::RaftLogReader<TypeConfig> for RedbLogStore {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + std::fmt::Debug + Send>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry>, openraft::StorageError<s3_core::NodeId>> {
+    ) -> Result<Vec<Entry>, openraft::StorageError<loony_core::NodeId>> {
         // `RB` isn't `'static`, so it can't cross into `spawn_blocking`'s closure as-is
         // -- but its bounds are just `u64`s, which are, so extract those before moving.
         let owned_range = (range.start_bound().cloned(), range.end_bound().cloned());
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.entries_in_range(owned_range))
             .await
-            .map_err(|e| openraft::StorageIOError::<s3_core::NodeId>::read_logs(&e))?
-            .map_err(|e| openraft::StorageIOError::<s3_core::NodeId>::read_logs(&e).into())
+            .map_err(|e| openraft::StorageIOError::<loony_core::NodeId>::read_logs(&e))?
+            .map_err(|e| openraft::StorageIOError::<loony_core::NodeId>::read_logs(&e).into())
     }
 }
 
@@ -90,7 +90,7 @@ impl openraft::storage::RaftLogStorage<TypeConfig> for RedbLogStore {
 
     async fn get_log_state(
         &mut self,
-    ) -> Result<openraft::storage::LogState<TypeConfig>, openraft::StorageError<s3_core::NodeId>> {
+    ) -> Result<openraft::storage::LogState<TypeConfig>, openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         let (last_purged, last) = tokio::task::spawn_blocking(move || -> Result<_, MetaError> {
             let last_purged = this.read_last_purged_sync()?;
@@ -120,7 +120,7 @@ impl openraft::storage::RaftLogStorage<TypeConfig> for RedbLogStore {
         self.clone()
     }
 
-    async fn save_vote(&mut self, vote: &Vote) -> Result<(), openraft::StorageError<s3_core::NodeId>> {
+    async fn save_vote(&mut self, vote: &Vote) -> Result<(), openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         let vote = *vote;
         tokio::task::spawn_blocking(move || -> Result<(), MetaError> {
@@ -138,7 +138,7 @@ impl openraft::storage::RaftLogStorage<TypeConfig> for RedbLogStore {
         .map_err(|e| openraft::StorageIOError::write_vote(&e).into())
     }
 
-    async fn read_vote(&mut self) -> Result<Option<Vote>, openraft::StorageError<s3_core::NodeId>> {
+    async fn read_vote(&mut self) -> Result<Option<Vote>, openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.read_vote_sync())
             .await
@@ -150,7 +150,7 @@ impl openraft::storage::RaftLogStorage<TypeConfig> for RedbLogStore {
         &mut self,
         entries: I,
         callback: openraft::storage::LogFlushed<TypeConfig>,
-    ) -> Result<(), openraft::StorageError<s3_core::NodeId>>
+    ) -> Result<(), openraft::StorageError<loony_core::NodeId>>
     where
         I: IntoIterator<Item = Entry> + Send,
         I::IntoIter: Send,
@@ -180,7 +180,7 @@ impl openraft::storage::RaftLogStorage<TypeConfig> for RedbLogStore {
         Ok(())
     }
 
-    async fn truncate(&mut self, log_id: LogId) -> Result<(), openraft::StorageError<s3_core::NodeId>> {
+    async fn truncate(&mut self, log_id: LogId) -> Result<(), openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || -> Result<(), MetaError> {
             let write_txn = this.db.begin_write().map_err(db_err)?;
@@ -203,7 +203,7 @@ impl openraft::storage::RaftLogStorage<TypeConfig> for RedbLogStore {
         .map_err(|e| openraft::StorageIOError::write_logs(&e).into())
     }
 
-    async fn purge(&mut self, log_id: LogId) -> Result<(), openraft::StorageError<s3_core::NodeId>> {
+    async fn purge(&mut self, log_id: LogId) -> Result<(), openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || -> Result<(), MetaError> {
             let write_txn = this.db.begin_write().map_err(db_err)?;

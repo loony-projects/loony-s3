@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use s3_auth::CredentialProvider;
-use s3_object::{BucketService, ObjectService};
+use loony_auth::CredentialProvider;
+use loony_object::{BucketService, ObjectService};
 
 #[derive(Clone)]
 pub struct AppState {

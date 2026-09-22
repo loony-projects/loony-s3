@@ -25,9 +25,9 @@ const SM_META_KEY: &str = "applied";
 const SNAPSHOT: TableDefinition<&str, &[u8]> = TableDefinition::new("snapshot");
 const SNAPSHOT_KEY: &str = "current";
 
-type LogId = openraft::LogId<s3_core::NodeId>;
-type StoredMembership = openraft::StoredMembership<s3_core::NodeId, openraft::BasicNode>;
-type SnapshotMeta = openraft::SnapshotMeta<s3_core::NodeId, openraft::BasicNode>;
+type LogId = openraft::LogId<loony_core::NodeId>;
+type StoredMembership = openraft::StoredMembership<loony_core::NodeId, openraft::BasicNode>;
+type SnapshotMeta = openraft::SnapshotMeta<loony_core::NodeId, openraft::BasicNode>;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct AppliedState {
@@ -69,7 +69,7 @@ impl RedbStateMachineStore {
 }
 
 impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for RedbStateMachineStore {
-    async fn build_snapshot(&mut self) -> Result<openraft::Snapshot<TypeConfig>, openraft::StorageError<s3_core::NodeId>> {
+    async fn build_snapshot(&mut self) -> Result<openraft::Snapshot<TypeConfig>, openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         let (meta, data) = tokio::task::spawn_blocking(move || -> Result<(SnapshotMeta, Vec<u8>), MetaError> {
             let applied = this.read_applied_state()?;
@@ -118,8 +118,8 @@ impl openraft::storage::RaftStateMachine<TypeConfig> for RedbStateMachineStore {
     async fn applied_state(
         &mut self,
     ) -> Result<
-        (Option<openraft::LogId<s3_core::NodeId>>, StoredMembership),
-        openraft::StorageError<s3_core::NodeId>,
+        (Option<openraft::LogId<loony_core::NodeId>>, StoredMembership),
+        openraft::StorageError<loony_core::NodeId>,
     > {
         let this = self.clone();
         let applied = tokio::task::spawn_blocking(move || this.read_applied_state())
@@ -132,7 +132,7 @@ impl openraft::storage::RaftStateMachine<TypeConfig> for RedbStateMachineStore {
     async fn apply<I>(
         &mut self,
         entries: I,
-    ) -> Result<Vec<crate::raft::types::CommandResult>, openraft::StorageError<s3_core::NodeId>>
+    ) -> Result<Vec<crate::raft::types::CommandResult>, openraft::StorageError<loony_core::NodeId>>
     where
         I: IntoIterator<Item = openraft::Entry<TypeConfig>> + Send,
         I::IntoIter: Send,
@@ -195,7 +195,7 @@ impl openraft::storage::RaftStateMachine<TypeConfig> for RedbStateMachineStore {
 
     async fn begin_receiving_snapshot(
         &mut self,
-    ) -> Result<Box<Cursor<Vec<u8>>>, openraft::StorageError<s3_core::NodeId>> {
+    ) -> Result<Box<Cursor<Vec<u8>>>, openraft::StorageError<loony_core::NodeId>> {
         Ok(Box::new(Cursor::new(Vec::new())))
     }
 
@@ -203,7 +203,7 @@ impl openraft::storage::RaftStateMachine<TypeConfig> for RedbStateMachineStore {
         &mut self,
         meta: &SnapshotMeta,
         snapshot: Box<Cursor<Vec<u8>>>,
-    ) -> Result<(), openraft::StorageError<s3_core::NodeId>> {
+    ) -> Result<(), openraft::StorageError<loony_core::NodeId>> {
         let data = snapshot.into_inner();
         let this = self.clone();
         let meta = meta.clone();
@@ -238,7 +238,7 @@ impl openraft::storage::RaftStateMachine<TypeConfig> for RedbStateMachineStore {
 
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<Option<openraft::Snapshot<TypeConfig>>, openraft::StorageError<s3_core::NodeId>> {
+    ) -> Result<Option<openraft::Snapshot<TypeConfig>>, openraft::StorageError<loony_core::NodeId>> {
         let this = self.clone();
         let stored = tokio::task::spawn_blocking(move || -> Result<Option<StoredSnapshot>, MetaError> {
             let read_txn = this.db.begin_read().map_err(db_err)?;

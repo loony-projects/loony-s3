@@ -18,7 +18,7 @@ cluster bootstrap/join with heartbeat-driven failure detection (Phase 7), and a 
 Phase 2 ran directly, so every mutation (standalone included: a single-voter group is
 still a real Raft group now, not a WAL-equivalence argument) is proposed through
 `Raft::client_write` and only applied once committed (Phase 8) — are all implemented
-and tested. `s3-server --mode cluster` now really bootstraps or joins, registers in a
+and tested. `loony-server --mode cluster` now really bootstraps or joins, registers in a
 shared node registry, and runs a background heartbeat loop. Verified across three
 genuinely separate OS processes: bootstrap → two joins → heartbeats confirming all
 three `Healthy` → killing one node's process → it's detected `Offline` within one
@@ -46,15 +46,15 @@ real bug: `CreateBucket`/`BeginMultipart`/`CompleteMultipart` used to mint their
 a real divergence the moment a second one existed. IDs and timestamps are now resolved
 once, by whichever node proposes the command, and carried inside it.
 
-**Since Phase 8: distributed PUT/GET (Phase 9) is wired up.** `s3-object` now places
-each stripe's shards with a real rendezvous-hashing engine (`s3-placement`, §10)
+**Since Phase 8: distributed PUT/GET (Phase 9) is wired up.** `loony-object` now places
+each stripe's shards with a real rendezvous-hashing engine (`loony-placement`, §10)
 across every `Healthy` node's volumes, not just this node's own — preferring distinct
 nodes and falling back to co-location only when there aren't enough. A new
 `ClusterShardStore` (`crates/rpc`) dispatches each shard read/write to local disk or,
 via `RemoteShardStore` over the existing internal RPC transport, to whichever node
 actually holds it, resolved through a `CachedNodeResolver` that's refreshed from the
 (Raft-replicated) node registry every 5s. Verified against two genuinely separate
-`s3-server` processes with the real AWS CLI: a multi-megabyte PUT issued against node 1
+`loony-server` processes with the real AWS CLI: a multi-megabyte PUT issued against node 1
 lands shards on both nodes' local disks, and a GET of that object issued against
 *either* node returns byte-identical data (`sha256sum` compared against the source
 file both ways).
@@ -71,7 +71,7 @@ Phase 5/9); `CompleteMultipartUpload` validates the requested part list against
 recorded `RecordPart` history (rejecting out-of-order or mismatched-ETag parts with the
 same `InvalidPart`/`InvalidPartOrder` codes real S3 uses) and commits the concatenated
 result with a single `CommitManifest` — the same atomic-visibility boundary a normal
-PUT already uses, not a separate protocol. Verified against a real `s3-server` process
+PUT already uses, not a separate protocol. Verified against a real `loony-server` process
 with the AWS CLI's low-level `s3api` commands (the high-level `s3 cp` transfer manager's
 *download* side uses concurrent HTTP Range requests above the same size threshold, which
 this server doesn't support yet — a pre-existing, already-documented gap, not something
@@ -103,18 +103,18 @@ var/flag; [`docs/api-reference.md`](docs/api-reference.md) for the exact S3 API 
 
 ```bash
 # Standalone
-S3_MODE=standalone S3_DATA_DIR=/tmp/loony-dev cargo run --bin s3-server
+S3_MODE=standalone S3_DATA_DIR=/tmp/loony-dev cargo run --bin loony-server
 
 # Cluster: bootstrap the first node, then have others join it
 S3_CLUSTER_TOKEN=shared-secret S3_MODE=cluster S3_CLUSTER_ID=my-cluster \
   S3_DATA_DIR=/tmp/loony-node1 S3_BIND_ADDR=127.0.0.1:9000 \
   S3_CLUSTER_ADDR=127.0.0.1:9100 S3_ADVERTISE_ADDR=127.0.0.1:9100 \
-  cargo run --bin s3-server -- --mode cluster --bootstrap
+  cargo run --bin loony-server -- --mode cluster --bootstrap
 
 S3_CLUSTER_TOKEN=shared-secret S3_MODE=cluster \
   S3_DATA_DIR=/tmp/loony-node2 S3_BIND_ADDR=127.0.0.1:9001 \
   S3_CLUSTER_ADDR=127.0.0.1:9101 S3_ADVERTISE_ADDR=127.0.0.1:9101 \
-  cargo run --bin s3-server -- --mode cluster --join 127.0.0.1:9100
+  cargo run --bin loony-server -- --mode cluster --join 127.0.0.1:9100
 ```
 
 Set `S3_VOLUME_PATHS` (comma-separated) to configure multiple local volumes — with 6 or

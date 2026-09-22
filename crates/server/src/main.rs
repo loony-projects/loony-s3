@@ -15,14 +15,14 @@ use std::sync::Arc;
 use clap::Parser;
 use config::{Cli, ClusterConfig, Config, Mode, ProcessEnv};
 use openraft::BasicNode;
-use s3_api::AppState;
-use s3_cluster::{ClusterIdentity, ClusterMembershipService, NodeIdentity};
-use s3_core::{ClusterId, NodeId};
-use s3_metadata::{Credential, MetadataStore, RaftMetadataStore};
-use s3_object::{BucketService, ObjectService};
-use s3_observability::{LoggingConfig, init_tracing, install_recorder};
-use s3_rpc::HttpRaftNetworkFactory;
-use s3_storage::LocalVolumeManager;
+use loony_api::AppState;
+use loony_cluster::{ClusterIdentity, ClusterMembershipService, NodeIdentity};
+use loony_core::{ClusterId, NodeId};
+use loony_metadata::{Credential, MetadataStore, RaftMetadataStore};
+use loony_object::{BucketService, ObjectService};
+use loony_observability::{LoggingConfig, init_tracing, install_recorder};
+use loony_rpc::HttpRaftNetworkFactory;
+use loony_storage::LocalVolumeManager;
 use sha2::{Digest, Sha256};
 
 #[tokio::main]
@@ -77,7 +77,7 @@ async fn main() -> std::process::ExitCode {
         };
     let volume_ids: Vec<_> = volumes.volume_ids().collect();
     let volume_count = volume_ids.len();
-    let volumes: Arc<dyn s3_storage::ShardStore> = Arc::new(volumes);
+    let volumes: Arc<dyn loony_storage::ShardStore> = Arc::new(volumes);
 
     tracing::info!(
         mode = ?config.mode,
@@ -209,7 +209,7 @@ async fn main() -> std::process::ExitCode {
         credentials: metadata,
         region: config.region.clone(),
     };
-    let router = s3_api::build_router(state);
+    let router = loony_api::build_router(state);
 
     let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
         Ok(listener) => listener,
@@ -248,7 +248,7 @@ async fn main() -> std::process::ExitCode {
 /// server up first (nothing is replicating to it yet), but starting it first
 /// unconditionally keeps this function's shape the same for both paths.
 ///
-/// Returns the cluster-aware [`s3_rpc::ClusterShardStore`] `ObjectService` should use
+/// Returns the cluster-aware [`loony_rpc::ClusterShardStore`] `ObjectService` should use
 /// for PUT/GET placement -- distinct from `shard_store`, which stays purely local and
 /// is what this node serves to *other* nodes' shard requests -- or `Err(exit_code)` on
 /// any failure that should stop startup.
@@ -257,19 +257,19 @@ async fn start_cluster_mode(
     identity: &NodeIdentity,
     data_dir: &std::path::Path,
     metadata: Arc<RaftMetadataStore>,
-    shard_store: Arc<dyn s3_storage::ShardStore>,
-    volume_ids: Vec<s3_core::VolumeId>,
+    shard_store: Arc<dyn loony_storage::ShardStore>,
+    volume_ids: Vec<loony_core::VolumeId>,
     token: String,
-) -> Result<Arc<dyn s3_storage::ShardStore>, std::process::ExitCode> {
+) -> Result<Arc<dyn loony_storage::ShardStore>, std::process::ExitCode> {
     let raft = metadata.raft().clone();
-    let rpc_state = s3_rpc::RpcServerState {
+    let rpc_state = loony_rpc::RpcServerState {
         shard_store: shard_store.clone(),
         metadata: metadata.clone() as Arc<dyn MetadataStore>,
         local_node: identity.node_id,
         token: token.clone(),
         raft: Some(raft),
     };
-    let rpc_router = s3_rpc::build_router(rpc_state);
+    let rpc_router = loony_rpc::build_router(rpc_state);
     let rpc_listener = match tokio::net::TcpListener::bind(cluster_config.cluster_addr).await {
         Ok(listener) => listener,
         Err(err) => {
@@ -370,12 +370,12 @@ async fn start_cluster_mode(
     };
 
     let membership = Arc::new(membership);
-    tokio::spawn(s3_cluster::run_heartbeat_loop(
+    tokio::spawn(loony_cluster::run_heartbeat_loop(
         membership.clone(),
         std::time::Duration::from_secs(5),
     ));
 
-    let resolver = Arc::new(s3_rpc::CachedNodeResolver::new());
+    let resolver = Arc::new(loony_rpc::CachedNodeResolver::new());
     if let Ok(nodes) = metadata.list_nodes().await {
         resolver.refresh(&nodes);
     }
@@ -394,10 +394,10 @@ async fn start_cluster_mode(
         });
     }
 
-    let cluster_shard_store = s3_rpc::ClusterShardStore::new(
+    let cluster_shard_store = loony_rpc::ClusterShardStore::new(
         identity.node_id,
         shard_store,
-        resolver as Arc<dyn s3_rpc::NodeAddressResolver>,
+        resolver as Arc<dyn loony_rpc::NodeAddressResolver>,
         token,
     );
 
@@ -415,7 +415,7 @@ fn resolve_cluster_token(cluster_id_hint: Option<&str>) -> (String, bool) {
         return (token, false);
     }
     let seed = cluster_id_hint.unwrap_or("unspecified-cluster");
-    let digest = Sha256::digest(format!("{seed}:s3-dev-cluster-token").as_bytes());
+    let digest = Sha256::digest(format!("{seed}:loony-dev-cluster-token").as_bytes());
     let token = digest
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -434,7 +434,7 @@ fn resolve_cluster_token(cluster_id_hint: Option<&str>) -> (String, bool) {
 async fn seed_root_credential(
     metadata: &Arc<RaftMetadataStore>,
     node_id: NodeId,
-) -> Result<(), s3_metadata::MetaError> {
+) -> Result<(), loony_metadata::MetaError> {
     let env_creds = (
         std::env::var("S3_ROOT_ACCESS_KEY").ok(),
         std::env::var("S3_ROOT_SECRET_KEY").ok(),
@@ -451,7 +451,7 @@ async fn seed_root_credential(
     // run, so restarts don't orphan the buckets/objects a prior root credential owned.
     let owner_id = match metadata.get_credential(&access_key).await? {
         Some(existing) => existing.owner_id,
-        None => s3_core::OwnerId::new(),
+        None => loony_core::OwnerId::new(),
     };
 
     metadata
@@ -492,7 +492,7 @@ fn derive_dev_credential(node_id: NodeId) -> (String, String) {
             .unwrap_or(&seed)
     );
     let secret_key = {
-        let digest = Sha256::digest(format!("{seed}:s3-dev-root-secret").as_bytes());
+        let digest = Sha256::digest(format!("{seed}:loony-dev-root-secret").as_bytes());
         digest
             .iter()
             .map(|b| format!("{b:02x}"))

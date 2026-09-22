@@ -14,7 +14,7 @@
 //! architecture.md §18 describes for the post-Raft world.
 //!
 //! One consequence worth being explicit about: in Phase 7, each node's bucket/object
-//! metadata (used by `s3-object`/`s3-api`) is *not* shared across the cluster — a node
+//! metadata (used by `loony-object`/`loony-api`) is *not* shared across the cluster — a node
 //! that joins is visible in cluster membership, but its buckets are still only visible
 //! to itself. Unifying that is Phase 8 (replication) + Phase 9 (distributed PUT/GET).
 
@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use s3_core::{ClusterId, NodeId, NodeInfo, NodeState, VolumeId};
-use s3_metadata::{MetadataStore, RegisterNode};
-use s3_rpc::{JoinRequest, fetch_health, fetch_members, join_cluster};
+use loony_core::{ClusterId, NodeId, NodeInfo, NodeState, VolumeId};
+use loony_metadata::{MetadataStore, RegisterNode};
+use loony_rpc::{JoinRequest, fetch_health, fetch_members, join_cluster};
 use tokio::sync::RwLock;
 
 use crate::error::ClusterError;
@@ -246,7 +246,7 @@ pub async fn run_heartbeat_loop(service: Arc<ClusterMembershipService>, interval
 #[cfg(test)]
 mod tests {
     use super::*;
-    use s3_metadata::RedbMetadataStore;
+    use loony_metadata::RedbMetadataStore;
 
     async fn open_metadata() -> Arc<RedbMetadataStore> {
         let dir = tempfile::tempdir().unwrap();

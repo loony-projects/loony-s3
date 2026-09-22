@@ -7,9 +7,9 @@ use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
 use serde::Deserialize;
 
-use s3_core::{BucketName, ObjectKey, UploadId};
-use s3_object::S3Error;
-use s3_storage::ShardBytesIn;
+use loony_core::{BucketName, ObjectKey, UploadId};
+use loony_object::S3Error;
+use loony_storage::ShardBytesIn;
 
 use super::request_id;
 use crate::auth::AuthenticatedOwner;
