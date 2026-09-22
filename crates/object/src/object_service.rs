@@ -7,10 +7,14 @@ use futures::future::try_join_all;
 use md5::{Digest as _, Md5};
 use s3_core::{
     Bucket, BucketName, DurabilityPolicy, ETag, NodeId, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, OwnerId, PartManifest, ShardLocation, ShardTarget, Stripe, VersionId, VolumeId,
+    ObjectManifest, OwnerId, PartManifest, ShardLocation, ShardTarget, Stripe, UploadId, VersionId,
+    VolumeId,
 };
 use s3_erasure::{ErasureCodec, RsErasureCodec};
-use s3_metadata::{ListObjectsPage, ListObjectsQuery, MetadataStore};
+use s3_metadata::{
+    BeginMultipart, CompleteMultipart, ListObjectsPage, ListObjectsQuery, MetaError, MetadataStore,
+    PartSummary,
+};
 use s3_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
 use sha2::Sha256;
 use time::OffsetDateTime;
@@ -184,7 +188,7 @@ impl ObjectService {
         key: ObjectKey,
         content_type: String,
         user_metadata: BTreeMap<String, String>,
-        mut body: ShardBytesIn,
+        body: ShardBytesIn,
         requesting_owner: OwnerId,
     ) -> Result<ObjectManifest, S3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
@@ -197,6 +201,49 @@ impl ObjectService {
         let version_id = VersionId::new();
         let candidate_count = self.placement_candidates().await.len();
 
+        let (stripes, total_size, sha256_digest, md5_digest) = self
+            .encode_body_to_stripes(object_id, version_id, candidate_count, body)
+            .await?;
+
+        let manifest = ObjectManifest {
+            object_id,
+            bucket_id: bucket.bucket_id,
+            key: key.clone(),
+            version_id,
+            size: total_size,
+            etag: ETag::from_md5(md5_digest),
+            sha256: sha256_digest,
+            content_type,
+            user_metadata,
+            created_at: OffsetDateTime::now_utc(),
+            delete_marker: false,
+            parts: vec![PartManifest {
+                part_number: 1,
+                offset: 0,
+                size: total_size,
+                etag_md5: md5_digest,
+                stripes,
+            }],
+        };
+
+        Ok(self.metadata.commit_manifest(manifest).await?)
+    }
+
+    /// Streams `body` into durable, placed shards exactly the way a whole-object
+    /// `put_object` does -- small-object replication vs. streaming stripe-by-stripe
+    /// erasure coding (architecture.md §8/§9), never buffering more than one stripe at a
+    /// time. Shared by `put_object` (as part 1 of 1) and `upload_part` (as one part of a
+    /// multipart upload, architecture.md §15) since a part's bytes are durable and
+    /// placed exactly the same way a whole small/large object's bytes are -- multipart
+    /// only changes how many `PartManifest`s a `commit_manifest` call ends up holding,
+    /// never how any single one of them gets its bytes onto disk.
+    async fn encode_body_to_stripes(
+        &self,
+        object_id: ObjectId,
+        version_id: VersionId,
+        candidate_count: usize,
+        mut body: ShardBytesIn,
+    ) -> Result<(Vec<Stripe>, u64, [u8; 32], [u8; 16]), S3Error> {
         // Peek up to the small-object threshold to decide durability policy without
         // buffering the whole object (architecture.md §9/§81).
         let mut head = Vec::new();
@@ -304,28 +351,173 @@ impl ObjectService {
         };
         let md5_digest: [u8; 16] = md5.finalize().into();
 
-        let manifest = ObjectManifest {
-            object_id,
-            bucket_id: bucket.bucket_id,
-            key: key.clone(),
-            version_id,
-            size: total_size,
-            etag: ETag::from_md5(md5_digest),
-            sha256: sha256_digest,
-            content_type,
-            user_metadata,
-            created_at: OffsetDateTime::now_utc(),
-            delete_marker: false,
-            parts: vec![PartManifest {
-                part_number: 1,
-                offset: 0,
-                size: total_size,
-                etag_md5: md5_digest,
-                stripes,
-            }],
-        };
+        Ok((stripes, total_size, sha256_digest, md5_digest))
+    }
 
-        Ok(self.metadata.commit_manifest(manifest).await?)
+    /// Starts a multipart upload (architecture.md §15 / prompt §27): allocates
+    /// `upload_id` and records `(bucket, key, content_type, user_metadata)` so any API
+    /// node can continue it afterward -- the upload's own record lives in the
+    /// (Raft-replicated, Phase 8) metadata store, not on whichever node happens to
+    /// handle this request.
+    pub async fn create_multipart_upload(
+        &self,
+        bucket: &BucketName,
+        key: ObjectKey,
+        content_type: String,
+        user_metadata: BTreeMap<String, String>,
+        requesting_owner: OwnerId,
+    ) -> Result<UploadId, S3Error> {
+        let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
+        Ok(self
+            .metadata
+            .begin_multipart(BeginMultipart {
+                bucket_id: bucket.bucket_id,
+                key,
+                content_type,
+                user_metadata,
+            })
+            .await?)
+    }
+
+    /// Confirms `upload_id` both exists and genuinely belongs to `(bucket, key)` under
+    /// `requesting_owner`'s bucket -- `upload_id` alone can't be trusted the way a
+    /// bucket/key pair already authorized via [`Self::authorized_bucket`] can, since
+    /// nothing about its value reveals which bucket it was created under.
+    async fn authorized_upload(
+        &self,
+        bucket: &BucketName,
+        key: &ObjectKey,
+        upload_id: UploadId,
+        requesting_owner: OwnerId,
+    ) -> Result<s3_metadata::MultipartUploadState, S3Error> {
+        let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
+        let state = self
+            .metadata
+            .get_upload(upload_id)
+            .await?
+            .ok_or(S3Error::NoSuchUpload)?;
+        if state.bucket_id != bucket.bucket_id || &state.key != key {
+            return Err(S3Error::NoSuchUpload);
+        }
+        Ok(state)
+    }
+
+    /// Uploads one part (architecture.md §15): the same durable, placed
+    /// encode-and-write pipeline as a whole-object PUT, recorded against `upload_id` via
+    /// `RecordPart` once written. Re-uploading the same `part_number` before Complete
+    /// overwrites what was recorded, matching S3 semantics.
+    pub async fn upload_part(
+        &self,
+        bucket: &BucketName,
+        key: &ObjectKey,
+        upload_id: UploadId,
+        part_number: u32,
+        body: ShardBytesIn,
+        requesting_owner: OwnerId,
+    ) -> Result<ETag, S3Error> {
+        self.authorized_upload(bucket, key, upload_id, requesting_owner)
+            .await?;
+        if !(1..=10_000).contains(&part_number) {
+            return Err(S3Error::InvalidArgument(
+                "part number must be between 1 and 10000".into(),
+            ));
+        }
+
+        // Placement identity for this part's shards -- purely a hashing seed for
+        // spreading load across candidates (architecture.md §10), never persisted
+        // anywhere, so (unlike `commit_manifest`'s object_id/version_id) freshness is
+        // all that's needed here, not cross-replica agreement.
+        let object_id = ObjectId::new();
+        let version_id = VersionId::new();
+        let candidate_count = self.placement_candidates().await.len();
+
+        let (stripes, size, _sha256, md5_digest) = self
+            .encode_body_to_stripes(object_id, version_id, candidate_count, body)
+            .await?;
+        let etag = ETag::from_md5(md5_digest);
+
+        self.metadata
+            .record_part(
+                upload_id,
+                PartManifest {
+                    part_number,
+                    // Recomputed from the final, validated part ordering at
+                    // CompleteMultipartUpload time (parts can be re-uploaded, possibly
+                    // out of order, until then) -- not trustworthy here.
+                    offset: 0,
+                    size,
+                    etag_md5: md5_digest,
+                    stripes,
+                },
+            )
+            .await
+            .map_err(map_multipart_meta_err)?;
+        Ok(etag)
+    }
+
+    /// Pure metadata read (architecture.md §15): every part recorded so far for
+    /// `upload_id`, regardless of whether it'll end up included in the eventual
+    /// `CompleteMultipartUpload`.
+    pub async fn list_parts(
+        &self,
+        bucket: &BucketName,
+        key: &ObjectKey,
+        upload_id: UploadId,
+        requesting_owner: OwnerId,
+    ) -> Result<Vec<PartSummary>, S3Error> {
+        self.authorized_upload(bucket, key, upload_id, requesting_owner)
+            .await?;
+        self.metadata
+            .list_parts(upload_id)
+            .await
+            .map_err(map_multipart_meta_err)
+    }
+
+    /// Validates `requested_parts` against recorded `RecordPart` history and, on
+    /// success, atomically commits the concatenated result as the new current version
+    /// via a single `CommitManifest` (architecture.md §15) -- the same atomic-visibility
+    /// boundary a normal PUT uses, not a separate protocol. `content_type`/
+    /// `user_metadata` come from the upload's own record (`CreateMultipartUpload`'s
+    /// request), not this request: real `CompleteMultipartUpload` requests don't carry
+    /// them.
+    pub async fn complete_multipart_upload(
+        &self,
+        bucket: &BucketName,
+        key: &ObjectKey,
+        upload_id: UploadId,
+        requested_parts: Vec<(u32, String)>,
+        requesting_owner: OwnerId,
+    ) -> Result<ObjectManifest, S3Error> {
+        let state = self
+            .authorized_upload(bucket, key, upload_id, requesting_owner)
+            .await?;
+        self.metadata
+            .complete_multipart(CompleteMultipart {
+                upload_id,
+                requested_parts,
+                content_type: state.content_type,
+            })
+            .await
+            .map_err(map_multipart_meta_err)
+    }
+
+    /// Marks the upload aborted; already-written part shards become orphan-GC
+    /// candidates after the grace period, the same as any other unreferenced shard
+    /// (architecture.md §15/§25 -- no synchronous shard deletion here, matching
+    /// `delete_object`'s own reasoning).
+    pub async fn abort_multipart_upload(
+        &self,
+        bucket: &BucketName,
+        key: &ObjectKey,
+        upload_id: UploadId,
+        requesting_owner: OwnerId,
+    ) -> Result<(), S3Error> {
+        self.authorized_upload(bucket, key, upload_id, requesting_owner)
+            .await?;
+        self.metadata
+            .abort_multipart(upload_id)
+            .await
+            .map_err(map_multipart_meta_err)
     }
 
     pub async fn get_object(
@@ -405,6 +597,21 @@ impl ObjectService {
                 max_keys: params.max_keys,
             })
             .await?)
+    }
+}
+
+/// Translates the multipart-specific [`MetaError`] variants (prompt §57's `NoSuchUpload`/
+/// `InvalidPart`/`InvalidPartOrder`) into their dedicated [`S3Error`] counterparts so
+/// `s3-api` maps them to the right HTTP status/code instead of a generic 500 — every
+/// other variant still falls through to the blanket `S3Error::Meta` conversion. Needed
+/// at each multipart metadata-store call past `authorized_upload`'s own check, since the
+/// upload can still be concurrently aborted/completed by another request in between.
+fn map_multipart_meta_err(err: MetaError) -> S3Error {
+    match err {
+        MetaError::NoSuchUpload(_) => S3Error::NoSuchUpload,
+        MetaError::InvalidPart => S3Error::InvalidPart,
+        MetaError::InvalidPartOrder => S3Error::InvalidPartOrder,
+        other => other.into(),
     }
 }
 
@@ -786,5 +993,259 @@ mod tests {
         };
         let page = service.list_objects(&bucket, params, owner).await.unwrap();
         assert_eq!(page.objects.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_uploads_parts_and_completes_into_one_object() {
+        let (service, bucket, owner) = service().await;
+        let key = ObjectKey::parse("big.bin").unwrap();
+
+        let upload_id = service
+            .create_multipart_upload(
+                &bucket,
+                key.clone(),
+                "application/octet-stream".into(),
+                BTreeMap::from([("origin".to_string(), "test".to_string())]),
+                owner,
+            )
+            .await
+            .unwrap();
+
+        let etag1 = service
+            .upload_part(&bucket, &key, upload_id, 1, body(b"hello "), owner)
+            .await
+            .unwrap();
+        let etag2 = service
+            .upload_part(&bucket, &key, upload_id, 2, body(b"world"), owner)
+            .await
+            .unwrap();
+
+        let parts = service
+            .list_parts(&bucket, &key, upload_id, owner)
+            .await
+            .unwrap();
+        assert_eq!(parts.len(), 2);
+
+        let manifest = service
+            .complete_multipart_upload(
+                &bucket,
+                &key,
+                upload_id,
+                vec![
+                    (1, etag1.as_str().to_string()),
+                    (2, etag2.as_str().to_string()),
+                ],
+                owner,
+            )
+            .await
+            .unwrap();
+        assert_eq!(manifest.size, 11);
+        assert!(manifest.etag.as_str().ends_with("-2"));
+        assert_eq!(manifest.content_type, "application/octet-stream");
+        assert_eq!(
+            manifest.user_metadata.get("origin"),
+            Some(&"test".to_string())
+        );
+
+        let (headed, stream) = service.get_object(&bucket, &key, owner).await.unwrap();
+        assert_eq!(headed.object_id, manifest.object_id);
+        assert_eq!(collect(stream).await, b"hello world");
+
+        // The completed upload no longer exists.
+        let err = service
+            .list_parts(&bucket, &key, upload_id, owner)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, S3Error::NoSuchUpload));
+    }
+
+    #[tokio::test]
+    async fn aborting_a_multipart_upload_discards_it() {
+        let (service, bucket, owner) = service().await;
+        let key = ObjectKey::parse("abandoned.bin").unwrap();
+
+        let upload_id = service
+            .create_multipart_upload(
+                &bucket,
+                key.clone(),
+                "application/octet-stream".into(),
+                Default::default(),
+                owner,
+            )
+            .await
+            .unwrap();
+        service
+            .upload_part(&bucket, &key, upload_id, 1, body(b"x"), owner)
+            .await
+            .unwrap();
+
+        service
+            .abort_multipart_upload(&bucket, &key, upload_id, owner)
+            .await
+            .unwrap();
+
+        let err = service
+            .list_parts(&bucket, &key, upload_id, owner)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, S3Error::NoSuchUpload));
+    }
+
+    #[tokio::test]
+    async fn completing_with_a_wrong_etag_or_out_of_order_parts_is_rejected() {
+        let (service, bucket, owner) = service().await;
+        let key = ObjectKey::parse("k").unwrap();
+
+        let upload_id = service
+            .create_multipart_upload(
+                &bucket,
+                key.clone(),
+                "application/octet-stream".into(),
+                Default::default(),
+                owner,
+            )
+            .await
+            .unwrap();
+        let etag1 = service
+            .upload_part(&bucket, &key, upload_id, 1, body(b"a"), owner)
+            .await
+            .unwrap();
+        let etag2 = service
+            .upload_part(&bucket, &key, upload_id, 2, body(b"b"), owner)
+            .await
+            .unwrap();
+
+        let err = service
+            .complete_multipart_upload(
+                &bucket,
+                &key,
+                upload_id,
+                vec![(1, "deadbeefdeadbeefdeadbeefdeadbeef".to_string())],
+                owner,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, S3Error::InvalidPart));
+
+        let err = service
+            .complete_multipart_upload(
+                &bucket,
+                &key,
+                upload_id,
+                vec![
+                    (2, etag2.as_str().to_string()),
+                    (1, etag1.as_str().to_string()),
+                ],
+                owner,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, S3Error::InvalidPartOrder));
+    }
+
+    #[tokio::test]
+    async fn multipart_operations_reject_a_different_owners_bucket() {
+        let (service, bucket, owner) = service().await;
+        let key = ObjectKey::parse("k").unwrap();
+        let upload_id = service
+            .create_multipart_upload(
+                &bucket,
+                key.clone(),
+                "application/octet-stream".into(),
+                Default::default(),
+                owner,
+            )
+            .await
+            .unwrap();
+
+        let other = OwnerId::new();
+        let err = service
+            .upload_part(&bucket, &key, upload_id, 1, body(b"x"), other)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, S3Error::AccessDenied));
+    }
+
+    /// Splits `data` into many small chunks the way a real streamed HTTP request body
+    /// arrives (never one single `Bytes` blob, unlike the `body()` helper above) -- the
+    /// live multipart duplication bug this test was written to catch only reproduced
+    /// over a real network, not through `body()`'s single-chunk stream.
+    fn chunked_body(data: &'static [u8]) -> ShardBytesIn {
+        let chunks: Vec<_> = data
+            .chunks(64 * 1024)
+            .map(|c| Ok(Bytes::from_static(c)))
+            .collect();
+        Box::pin(futures::stream::iter(chunks))
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_with_erasure_coded_parts_roundtrips_without_duplication() {
+        let (service, bucket, owner) = service_with_volumes(6).await;
+        let key = ObjectKey::parse("big-multipart.bin").unwrap();
+
+        // Each part exceeds SMALL_OBJECT_THRESHOLD, so every part goes through the
+        // erasure-coded path individually, the way a real multi-MB multipart part does.
+        let mut part1_data = vec![0u8; 5 * 1024 * 1024];
+        for (i, b) in part1_data.iter_mut().enumerate() {
+            *b = (i % 251) as u8;
+        }
+        let part1_data: &'static [u8] = Box::leak(part1_data.into_boxed_slice());
+        let mut part2_data = vec![0u8; 5 * 1024 * 1024];
+        for (i, b) in part2_data.iter_mut().enumerate() {
+            *b = ((i + 7) % 251) as u8;
+        }
+        let part2_data: &'static [u8] = Box::leak(part2_data.into_boxed_slice());
+
+        let upload_id = service
+            .create_multipart_upload(
+                &bucket,
+                key.clone(),
+                "application/octet-stream".into(),
+                Default::default(),
+                owner,
+            )
+            .await
+            .unwrap();
+        let etag1 = service
+            .upload_part(&bucket, &key, upload_id, 1, chunked_body(part1_data), owner)
+            .await
+            .unwrap();
+        let etag2 = service
+            .upload_part(&bucket, &key, upload_id, 2, chunked_body(part2_data), owner)
+            .await
+            .unwrap();
+
+        let manifest = service
+            .complete_multipart_upload(
+                &bucket,
+                &key,
+                upload_id,
+                vec![
+                    (1, etag1.as_str().to_string()),
+                    (2, etag2.as_str().to_string()),
+                ],
+                owner,
+            )
+            .await
+            .unwrap();
+        assert_eq!(manifest.size, (part1_data.len() + part2_data.len()) as u64);
+
+        let (_, stream) = service.get_object(&bucket, &key, owner).await.unwrap();
+        let fetched = collect(stream).await;
+        assert_eq!(fetched.len(), part1_data.len() + part2_data.len());
+        let mut expected = part1_data.to_vec();
+        expected.extend_from_slice(part2_data);
+        assert_eq!(fetched, expected);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_upload_id_is_rejected() {
+        let (service, bucket, owner) = service().await;
+        let key = ObjectKey::parse("k").unwrap();
+        let err = service
+            .list_parts(&bucket, &key, UploadId::new(), owner)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, S3Error::NoSuchUpload));
     }
 }

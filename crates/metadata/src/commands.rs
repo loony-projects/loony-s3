@@ -48,6 +48,7 @@ pub struct BeginMultipart {
     pub bucket_id: BucketId,
     pub key: ObjectKey,
     pub content_type: String,
+    pub user_metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -56,6 +57,7 @@ pub struct MultipartUploadState {
     pub bucket_id: BucketId,
     pub key: ObjectKey,
     pub content_type: String,
+    pub user_metadata: BTreeMap<String, String>,
     #[serde(with = "time::serde::rfc3339")]
     pub initiated_at: OffsetDateTime,
     pub parts: BTreeMap<u32, PartManifest>,

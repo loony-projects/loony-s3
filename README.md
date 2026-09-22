@@ -4,7 +4,7 @@ A production-oriented, S3-compatible object storage system in Rust that runs as 
 single-process standalone server or as a multi-node fault-tolerant cluster from the same
 codebase.
 
-**Status: Phases 1-9 complete — distributed PUT/GET now really spans nodes.**
+**Status: Phases 1-10 complete — multipart upload is now real and cluster-safe.**
 Config/logging/metrics/node identity (Phase 1), a redb-backed metadata state machine
 (Phase 2), the real S3 API over a real HTTP server —
 CreateBucket/DeleteBucket/HeadBucket/ListBuckets/PutObject/GetObject/HeadObject/
@@ -59,17 +59,40 @@ lands shards on both nodes' local disks, and a GET of that object issued against
 *either* node returns byte-identical data (`sha256sum` compared against the source
 file both ways).
 
+**Since Phase 9: multipart upload (Phase 10) is wired up.** CreateMultipartUpload/
+UploadPart/ListParts/CompleteMultipartUpload/AbortMultipartUpload are all implemented
+as query-param variants of the existing `/{bucket}/{key}` route (matching real S3's own
+shape). Multipart state (`(bucket, key, content_type, user_metadata)` plus every
+recorded part) lives in the same Raft-replicated metadata store as everything else, so
+any node can continue an upload another node started — no coordinator affinity. Each
+part streams through the exact same durable, placed encode-and-write pipeline as a
+whole-object PUT (small-object replication or streaming erasure coding, unchanged from
+Phase 5/9); `CompleteMultipartUpload` validates the requested part list against
+recorded `RecordPart` history (rejecting out-of-order or mismatched-ETag parts with the
+same `InvalidPart`/`InvalidPartOrder` codes real S3 uses) and commits the concatenated
+result with a single `CommitManifest` — the same atomic-visibility boundary a normal
+PUT already uses, not a separate protocol. Verified against a real `s3-server` process
+with the AWS CLI's low-level `s3api` commands (the high-level `s3 cp` transfer manager's
+*download* side uses concurrent HTTP Range requests above the same size threshold, which
+this server doesn't support yet — a pre-existing, already-documented gap, not something
+multipart introduced): a 3-part, 12 MiB upload round-trips byte-identical, and the
+`InvalidPart`/`InvalidPartOrder`/`NoSuchUpload` error paths all return the correct S3
+error codes.
+
 **What's still not there**: a learner is never automatically promoted to a voter (no
 `change_membership` call exists yet), so a single-voter group's leader still can't fail
 over to a second node — matching architecture.md §5's documented design (a small,
 explicit voter set) but meaning today's cluster mode has no real HA story yet, and, in
 practice, writes (which go through `Raft::client_write`) only succeed against whichever
 node is currently the metadata leader — a non-leader node returns an error rather than
-forwarding the request. PUT also still requires every planned shard write to succeed;
-there's no partial-write-quorum/abort semantics from architecture.md §11 and no
-degraded-write healing-job enqueueing from §12-14 yet. Internal RPC auth is still a
-bearer token, not the mTLS the architecture doc commits to for production. Multipart
-upload and Range requests also remain unimplemented (separate, later-scoped phases).
+forwarding the request. PUT (and each multipart part) still requires every planned
+shard write to succeed; there's no partial-write-quorum/abort semantics from
+architecture.md §11 and no degraded-write healing-job enqueueing from §12-14 yet.
+Internal RPC auth is still a bearer token, not the mTLS the architecture doc commits to
+for production. HTTP Range requests, object versioning, and `x-amz-meta-*` response
+headers on GET/HEAD (user metadata is stored and preserved correctly through PUT and
+multipart, just never echoed back yet — a pre-existing gap, not new to Phase 10) all
+remain unimplemented.
 
 **Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (AWS
 CLI, boto3, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env

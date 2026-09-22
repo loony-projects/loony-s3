@@ -142,8 +142,10 @@ server's URL, and its region. The credentials are kept client-side (in the brows
 used to sign every request — nothing is sent to any third party.
 
 From there: create a bucket, drag-and-drop files to upload, list/download/delete
-objects, copy a presigned link for a file. Uploads are always a single `PUT` regardless
-of size (multipart isn't implemented yet — see [api-reference.md](api-reference.md)).
+objects, copy a presigned link for a file. The web UI's own uploader always sends a
+single `PUT` regardless of size (no chunking) — the server itself does support
+multipart upload (`aws s3 cp`/`aws s3api create-multipart-upload` and friends), see
+[api-reference.md](api-reference.md).
 
 Production build: `npm run build` (output in `frontend/dist/`, a static site — serve it
 from any static host, pointed at a real `VITE_API_URL`).

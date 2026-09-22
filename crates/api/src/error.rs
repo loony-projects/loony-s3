@@ -58,6 +58,21 @@ fn map_error(error: &S3Error) -> (StatusCode, &'static str, String) {
             "AccessDenied",
             "Access Denied".to_string(),
         ),
+        S3Error::NoSuchUpload => (
+            StatusCode::NOT_FOUND,
+            "NoSuchUpload",
+            "The specified multipart upload does not exist".into(),
+        ),
+        S3Error::InvalidPart => (
+            StatusCode::BAD_REQUEST,
+            "InvalidPart",
+            "One or more of the specified parts could not be found".into(),
+        ),
+        S3Error::InvalidPartOrder => (
+            StatusCode::BAD_REQUEST,
+            "InvalidPartOrder",
+            "The list of parts was not in ascending order".into(),
+        ),
         S3Error::Meta(_) | S3Error::Storage(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",

@@ -11,7 +11,7 @@ use s3_core::{
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    PartSummary, RegisterNode,
+    MultipartUploadState, PartSummary, RegisterNode,
 };
 use crate::error::MetaError;
 use s3_core::PartManifest;
@@ -37,6 +37,15 @@ pub trait MetadataStore: Send + Sync {
     async fn list_objects(&self, query: ListObjectsQuery) -> Result<ListObjectsPage, MetaError>;
 
     async fn begin_multipart(&self, cmd: BeginMultipart) -> Result<UploadId, MetaError>;
+    /// The upload's own record -- bucket/key/content-type/metadata it was created with
+    /// (never the recorded parts; use `list_parts` for those). Callers use this to
+    /// authorize an operation against an `upload_id` (confirming it really belongs to
+    /// the bucket/key the caller claims) and to recover the content-type/metadata a
+    /// `CompleteMultipartUpload` request doesn't itself carry.
+    async fn get_upload(
+        &self,
+        upload_id: UploadId,
+    ) -> Result<Option<MultipartUploadState>, MetaError>;
     async fn record_part(&self, upload_id: UploadId, part: PartManifest) -> Result<(), MetaError>;
     async fn list_parts(&self, upload_id: UploadId) -> Result<Vec<PartSummary>, MetaError>;
     async fn complete_multipart(&self, cmd: CompleteMultipart)

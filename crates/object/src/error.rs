@@ -21,6 +21,12 @@ pub enum S3Error {
     InvalidArgument(String),
     #[error("access denied")]
     AccessDenied,
+    #[error("the specified multipart upload does not exist")]
+    NoSuchUpload,
+    #[error("one or more of the specified parts could not be found")]
+    InvalidPart,
+    #[error("the list of parts was not in ascending order")]
+    InvalidPartOrder,
 
     #[error("metadata store error: {0}")]
     Meta(#[from] MetaError),

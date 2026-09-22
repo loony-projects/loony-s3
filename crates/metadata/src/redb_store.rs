@@ -351,6 +351,7 @@ impl MetadataStore for RedbMetadataStore {
                     bucket_id: cmd.bucket_id,
                     key: cmd.key,
                     content_type: cmd.content_type,
+                    user_metadata: cmd.user_metadata,
                     initiated_at: OffsetDateTime::now_utc(),
                     parts: Default::default(),
                 };
@@ -361,6 +362,21 @@ impl MetadataStore for RedbMetadataStore {
             }
             write_txn.commit().map_err(db_err)?;
             Ok(upload_id)
+        })
+        .await
+    }
+
+    async fn get_upload(
+        &self,
+        upload_id: UploadId,
+    ) -> Result<Option<MultipartUploadState>, MetaError> {
+        self.blocking(move |db| {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = read_txn.open_table(MULTIPART).map_err(db_err)?;
+            match table.get(upload_id.to_string().as_str()).map_err(db_err)? {
+                Some(guard) => Ok(Some(serde_json::from_slice(guard.value())?)),
+                None => Ok(None),
+            }
         })
         .await
     }
@@ -495,7 +511,7 @@ impl MetadataStore for RedbMetadataStore {
                     etag,
                     sha256,
                     content_type: cmd.content_type,
-                    user_metadata: Default::default(),
+                    user_metadata: state.user_metadata.clone(),
                     created_at: OffsetDateTime::now_utc(),
                     delete_marker: false,
                     parts,
@@ -937,6 +953,7 @@ mod tests {
                 bucket_id,
                 key: key.clone(),
                 content_type: "application/octet-stream".into(),
+                user_metadata: Default::default(),
             })
             .await
             .unwrap();
@@ -1005,6 +1022,7 @@ mod tests {
                 bucket_id,
                 key: ObjectKey::parse("f").unwrap(),
                 content_type: "application/octet-stream".into(),
+                user_metadata: Default::default(),
             })
             .await
             .unwrap();
@@ -1065,6 +1083,7 @@ mod tests {
                 bucket_id: BucketId::new(),
                 key: ObjectKey::parse("f").unwrap(),
                 content_type: "application/octet-stream".into(),
+                user_metadata: Default::default(),
             })
             .await
             .unwrap();

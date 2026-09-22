@@ -23,7 +23,7 @@ use s3_core::{
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    PartSummary, RegisterNode,
+    MultipartUploadState, PartSummary, RegisterNode,
 };
 use crate::error::MetaError;
 use crate::raft::applier::{self, db_err};
@@ -250,6 +250,10 @@ impl MetadataStore for RaftMetadataStore {
             CommandResponse::UploadId(id) => Ok(id),
             _ => Err(unexpected_response()),
         }
+    }
+
+    async fn get_upload(&self, upload_id: UploadId) -> Result<Option<MultipartUploadState>, MetaError> {
+        self.read(move |db| applier::get_upload(db, upload_id)).await
     }
 
     async fn record_part(&self, upload_id: UploadId, part: PartManifest) -> Result<(), MetaError> {

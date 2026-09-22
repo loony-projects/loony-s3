@@ -615,3 +615,212 @@ async fn a_valid_presigned_url_grants_access_without_an_authorization_header() {
     let body = res.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(body.as_ref(), b"presigned-data");
 }
+
+/// Naive `<Tag>content</Tag>` extraction -- good enough for asserting on this server's
+/// own hand-rolled response XML (`crates/api/src/xml.rs`) without pulling in a real XML
+/// parser just for tests.
+fn xml_tag(body: &str, tag: &str) -> String {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = body
+        .find(&open)
+        .unwrap_or_else(|| panic!("no <{tag}> in {body}"))
+        + open.len();
+    let end = body[start..].find(&close).unwrap() + start;
+    body[start..end].to_string()
+}
+
+#[tokio::test]
+async fn multipart_upload_create_upload_list_complete_and_get_roundtrip() {
+    let app = test_app().await;
+    app.router
+        .clone()
+        .oneshot(req("PUT", "/uploads"))
+        .await
+        .unwrap();
+
+    let mut create_req = signed_request("POST", "/uploads/big.bin?uploads", Vec::new());
+    create_req.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/octet-stream".parse().unwrap(),
+    );
+    create_req
+        .headers_mut()
+        .insert("x-amz-meta-origin", "integration-test".parse().unwrap());
+    let res = app.router.clone().oneshot(create_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let create_body = body_string(res).await;
+    let upload_id = xml_tag(&create_body, "UploadId");
+    assert_eq!(xml_tag(&create_body, "Bucket"), "uploads");
+    assert_eq!(xml_tag(&create_body, "Key"), "big.bin");
+
+    let part1 = b"hello ".to_vec();
+    let part2 = b"multipart world".to_vec();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request(
+            "PUT",
+            &format!("/uploads/big.bin?partNumber=1&uploadId={upload_id}"),
+            part1.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let etag1 = res
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request(
+            "PUT",
+            &format!("/uploads/big.bin?partNumber=2&uploadId={upload_id}"),
+            part2.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let etag2 = res
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req(
+            "GET",
+            &format!("/uploads/big.bin?uploadId={upload_id}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let list_body = body_string(res).await;
+    assert!(list_body.contains("<PartNumber>1</PartNumber>"));
+    assert!(list_body.contains("<PartNumber>2</PartNumber>"));
+
+    let complete_body = format!(
+        "<CompleteMultipartUpload>\
+         <Part><PartNumber>1</PartNumber><ETag>{etag1}</ETag></Part>\
+         <Part><PartNumber>2</PartNumber><ETag>{etag2}</ETag></Part>\
+         </CompleteMultipartUpload>"
+    );
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request(
+            "POST",
+            &format!("/uploads/big.bin?uploadId={upload_id}"),
+            complete_body.into_bytes(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let complete_response = body_string(res).await;
+    assert!(
+        xml_tag(&complete_response, "ETag").contains("-2"),
+        "complete response was: {complete_response}"
+    );
+
+    // Completing again with the now-stale upload id fails cleanly rather than silently
+    // re-running the completion.
+    let res = app
+        .router
+        .clone()
+        .oneshot(req(
+            "GET",
+            &format!("/uploads/big.bin?uploadId={upload_id}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let body = body_string(res).await;
+    assert!(
+        body.contains("<Code>NoSuchUpload</Code>"),
+        "body was: {body}"
+    );
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req("GET", "/uploads/big.bin"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let content_type = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(content_type, "application/octet-stream");
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let mut expected = part1;
+    expected.extend_from_slice(&part2);
+    assert_eq!(body.as_ref(), expected.as_slice());
+}
+
+#[tokio::test]
+async fn aborting_a_multipart_upload_via_http_discards_it() {
+    let app = test_app().await;
+    app.router
+        .clone()
+        .oneshot(req("PUT", "/uploads"))
+        .await
+        .unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request(
+            "POST",
+            "/uploads/abandoned.bin?uploads",
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+    let upload_id = xml_tag(&body_string(res).await, "UploadId");
+
+    app.router
+        .clone()
+        .oneshot(signed_request(
+            "PUT",
+            &format!("/uploads/abandoned.bin?partNumber=1&uploadId={upload_id}"),
+            b"x".to_vec(),
+        ))
+        .await
+        .unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req(
+            "DELETE",
+            &format!("/uploads/abandoned.bin?uploadId={upload_id}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req(
+            "GET",
+            &format!("/uploads/abandoned.bin?uploadId={upload_id}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

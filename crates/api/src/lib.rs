@@ -5,8 +5,10 @@
 //! Phase 3/4 scope (prompt's own phase boundaries): CreateBucket, DeleteBucket,
 //! HeadBucket, ListBuckets, PutObject, GetObject, HeadObject, DeleteObject,
 //! ListObjectsV2, all behind SigV4 (header + presigned) authentication and
-//! ownership-based authorization. No multipart yet, no Range requests yet, no
-//! versioning query params yet — each is a later, separately-scoped phase.
+//! ownership-based authorization. Phase 10 adds CreateMultipartUpload/UploadPart/
+//! ListParts/CompleteMultipartUpload/AbortMultipartUpload as query-param variants of
+//! the same `/{bucket}/{key}` route (prompt §51). No Range requests yet, no versioning
+//! query params yet — each is a later, separately-scoped phase.
 
 mod auth;
 mod error;
@@ -44,7 +46,8 @@ pub fn build_router(state: AppState) -> Router {
             put(handlers::object::put_object)
                 .get(handlers::object::get_object)
                 .head(handlers::object::head_object)
-                .delete(handlers::object::delete_object),
+                .delete(handlers::object::delete_object)
+                .post(handlers::object::post_object),
         )
         .layer(
             ServiceBuilder::new()

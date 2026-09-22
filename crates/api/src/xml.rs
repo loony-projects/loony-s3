@@ -4,8 +4,8 @@
 //! these are built directly — simpler to get right and to keep matching AWS's exact
 //! shape than fighting a serde adapter meant for more regular documents.
 
-use s3_core::{Bucket, ETag, OwnerId};
-use s3_metadata::{ListObjectsPage, ObjectSummary};
+use s3_core::{Bucket, ETag, OwnerId, UploadId};
+use s3_metadata::{ListObjectsPage, ObjectSummary, PartSummary};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -118,6 +118,56 @@ fn object_summary_xml(object: &ObjectSummary) -> String {
 /// The quoted-ETag convention every S3 client expects on both headers and XML bodies.
 pub fn quoted_etag(etag: &ETag) -> String {
     format!("\"{}\"", etag.as_str())
+}
+
+pub fn initiate_multipart_upload_result(bucket: &str, key: &str, upload_id: UploadId) -> String {
+    format!(
+        "{XML_HEADER}<InitiateMultipartUploadResult xmlns=\"{XMLNS}\">\
+         <Bucket>{}</Bucket><Key>{}</Key><UploadId>{}</UploadId>\
+         </InitiateMultipartUploadResult>",
+        escape(bucket),
+        escape(key),
+        upload_id,
+    )
+}
+
+pub fn list_parts_result(
+    bucket: &str,
+    key: &str,
+    upload_id: UploadId,
+    parts: &[PartSummary],
+) -> String {
+    let mut body = format!(
+        "{XML_HEADER}<ListPartsResult xmlns=\"{XMLNS}\">\
+         <Bucket>{}</Bucket><Key>{}</Key><UploadId>{}</UploadId>\
+         <StorageClass>STANDARD</StorageClass><IsTruncated>false</IsTruncated>",
+        escape(bucket),
+        escape(key),
+        upload_id,
+    );
+    let mut sorted: Vec<&PartSummary> = parts.iter().collect();
+    sorted.sort_by_key(|p| p.part_number);
+    for part in sorted {
+        body.push_str(&format!(
+            "<Part><PartNumber>{}</PartNumber><ETag>&quot;{}&quot;</ETag><Size>{}</Size></Part>",
+            part.part_number,
+            escape(ETag::from_md5(part.etag_md5).as_str()),
+            part.size,
+        ));
+    }
+    body.push_str("</ListPartsResult>");
+    body
+}
+
+pub fn complete_multipart_upload_result(bucket: &str, key: &str, etag: &ETag) -> String {
+    format!(
+        "{XML_HEADER}<CompleteMultipartUploadResult xmlns=\"{XMLNS}\">\
+         <Bucket>{}</Bucket><Key>{}</Key><ETag>&quot;{}&quot;</ETag>\
+         </CompleteMultipartUploadResult>",
+        escape(bucket),
+        escape(key),
+        escape(etag.as_str()),
+    )
 }
 
 #[cfg(test)]

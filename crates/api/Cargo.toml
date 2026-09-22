@@ -23,6 +23,7 @@ time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 serde.workspace = true
+quick-xml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

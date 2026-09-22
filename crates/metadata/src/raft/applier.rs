@@ -305,6 +305,7 @@ pub(crate) fn begin_multipart(db: &Database, resolved: ResolvedBeginMultipart) -
             bucket_id: cmd.bucket_id,
             key: cmd.key,
             content_type: cmd.content_type,
+            user_metadata: cmd.user_metadata,
             initiated_at,
             parts: Default::default(),
         };
@@ -315,6 +316,18 @@ pub(crate) fn begin_multipart(db: &Database, resolved: ResolvedBeginMultipart) -
     }
     write_txn.commit().map_err(db_err)?;
     Ok(upload_id)
+}
+
+pub(crate) fn get_upload(
+    db: &Database,
+    upload_id: UploadId,
+) -> Result<Option<MultipartUploadState>, MetaError> {
+    let read_txn = db.begin_read().map_err(db_err)?;
+    let table = read_txn.open_table(MULTIPART).map_err(db_err)?;
+    match table.get(upload_id.to_string().as_str()).map_err(db_err)? {
+        Some(guard) => Ok(Some(serde_json::from_slice(guard.value())?)),
+        None => Ok(None),
+    }
 }
 
 pub(crate) fn record_part(db: &Database, upload_id: UploadId, part: PartManifest) -> Result<(), MetaError> {
@@ -429,7 +442,7 @@ pub(crate) fn complete_multipart(db: &Database, resolved: ResolvedCompleteMultip
             etag,
             sha256,
             content_type: cmd.content_type,
-            user_metadata: Default::default(),
+            user_metadata: state.user_metadata.clone(),
             created_at,
             delete_marker: false,
             parts,

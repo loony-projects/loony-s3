@@ -13,23 +13,32 @@ general S3 protocol itself, see AWS's own S3 API reference.
 | DeleteBucket | `DELETE /{bucket}` | Fails with `BucketNotEmpty` unless the bucket has no objects. |
 | HeadBucket | `HEAD /{bucket}` | |
 | ListObjectsV2 | `GET /{bucket}?list-type=2` | `prefix`, `delimiter`, `max-keys` (default/max 1000), `continuation-token`, `start-after` all supported. |
-| PutObject | `PUT /{bucket}/{key}` | Single request body only — see "Not yet implemented" below. |
+| PutObject | `PUT /{bucket}/{key}` | Single request body only. For anything large, prefer multipart (below) — the web UI's uploader still sends one request per object, no chunking. |
 | GetObject | `GET /{bucket}/{key}` | |
 | HeadObject | `HEAD /{bucket}/{key}` | |
 | DeleteObject | `DELETE /{bucket}/{key}` | Idempotent: deleting an already-absent key is not an error. |
+| CreateMultipartUpload | `POST /{bucket}/{key}?uploads` | Returns an `UploadId`; any API node can continue the upload afterward (multipart state is in the Raft-replicated metadata store, not pinned to whichever node handled Create). |
+| UploadPart | `PUT /{bucket}/{key}?partNumber=N&uploadId=X` | `N` is 1-10000. Re-uploading the same `partNumber` before Complete overwrites what was recorded. |
+| ListParts | `GET /{bucket}/{key}?uploadId=X` | Every part recorded so far, regardless of whether it'll end up in the eventual Complete. |
+| CompleteMultipartUpload | `POST /{bucket}/{key}?uploadId=X` | Body: `<CompleteMultipartUpload><Part><PartNumber>N</PartNumber><ETag>"..."</ETag></Part>...</CompleteMultipartUpload>`, parts in ascending order. Validated against recorded parts and committed atomically — same visibility mechanism as a plain PUT. |
+| AbortMultipartUpload | `DELETE /{bucket}/{key}?uploadId=X` | Idempotent. Already-written part shards become orphan-GC candidates (not yet implemented) rather than being deleted synchronously. |
 
 All routes are path-style (`http://host:port/{bucket}/{key}`); there is no
 virtual-hosted-style (`{bucket}.host`) routing.
 
 ## Not yet implemented
 
-- **Multipart upload** (`CreateMultipartUpload`/`UploadPart`/`CompleteMultipartUpload`).
-  There is no route for these at all (no `POST`/`?uploads` handling), so calling them
-  gets a plain HTTP 404/405 from the router, not an S3-shaped XML error — this is a real
-  gap, not a documented error path. Every `PutObject` is a single request regardless of
-  size; the web UI's uploader reflects this directly (no chunking).
 - **Range requests** — the `Range` header on `GetObject` is silently ignored; the full
-  object is always returned rather than an error or a `206 Partial Content`.
+  object is always returned rather than an error or a `206 Partial Content`. This means
+  the AWS CLI's high-level `s3 cp` **download** of a large object (which switches to
+  concurrent ranged GETs above its own size threshold, independent of multipart) will
+  produce a corrupted local file — each parallel request gets the *full* object instead
+  of its slice. Use `s3api get-object` (a single plain GET) for large downloads until
+  Range support lands, or `s3 cp` for anything under that threshold.
+- **`x-amz-meta-*` response headers** — user metadata given to `PutObject`/
+  `CreateMultipartUpload` is stored and preserved correctly (round-trips through a
+  multipart Complete too), but `GetObject`/`HeadObject` never echo it back as response
+  headers yet.
 - **Bucket versioning** — the domain model has a `versioning_state` field, but it's
   always `Disabled`; only the current version of an object is ever retained.
 - **Object ACLs, bucket policies, lifecycle rules, CORS-per-bucket configuration,
@@ -121,6 +130,9 @@ Errors are XML `<Error>` bodies matching real S3's shape and vocabulary:
 | `BucketNotEmpty` | 409 | `DeleteBucket` on a non-empty bucket |
 | `InvalidBucketName` | 400 | |
 | `InvalidArgument` | 400 | |
+| `NoSuchUpload` | 404 | Unknown, aborted, already-completed, or wrong-bucket/key `uploadId` |
+| `InvalidPart` | 400 | `CompleteMultipartUpload` referenced a part number never recorded, or gave an ETag that doesn't match what was recorded |
+| `InvalidPartOrder` | 400 | `CompleteMultipartUpload`'s part list wasn't strictly ascending by part number |
 | `AccessDenied` | 403 | Missing signature, or a credential touching a bucket it doesn't own |
 | `SignatureDoesNotMatch` | 403 | Signature verification failed |
 | `InvalidAccessKeyId` | 403 | Access key doesn't correspond to a known credential |
@@ -130,7 +142,7 @@ Errors are XML `<Error>` bodies matching real S3's shape and vocabulary:
 ## Response headers
 
 `GetObject`/`HeadObject` responses include `ETag` (content hash — MD5-based for a
-single-part object, multipart-digest-based with a `-N` suffix once multipart upload
-exists) and `Last-Modified` in the format the AWS CLI's transfer manager expects. Every
-response also carries `x-amz-request-id` (a UUIDv7), useful for correlating a client-side
-error against the server's logs.
+single-part object, `hex(MD5(concat(part MD5s)))-N` for an object completed via
+multipart, AWS's own documented convention) and `Last-Modified` in the format the AWS
+CLI's transfer manager expects. Every response also carries `x-amz-request-id` (a
+UUIDv7), useful for correlating a client-side error against the server's logs.
