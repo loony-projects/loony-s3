@@ -17,7 +17,7 @@ export function Navbar() {
         <div className="flex items-center justify-between h-14">
           <Link to="/" className="flex items-center gap-2 font-semibold text-gray-900 hover:text-blue-600 transition-colors">
             <Database className="w-5 h-5 text-blue-600" />
-            <span>Loony S3</span>
+            <span>Loony LS3</span>
           </Link>
 
           {accessKey && (

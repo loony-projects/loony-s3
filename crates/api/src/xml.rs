@@ -1,7 +1,7 @@
-//! Hand-rolled S3 response XML. `quick-xml`'s serde integration doesn't cleanly express
-//! S3's repeated-element-without-a-wrapper-name shape (`<Contents>...</Contents>`
+//! Hand-rolled LS3 response XML. `quick-xml`'s serde integration doesn't cleanly express
+//! LS3's repeated-element-without-a-wrapper-name shape (`<Contents>...</Contents>`
 //! repeated directly inside `<ListBucketResult>`) without fighting its Vec handling, so
-//! these are built directly — simpler to get right and to keep matching AWS's exact
+//! these are built directly — simpler to get right and to keep matching the upstream protocol's exact
 //! shape than fighting a serde adapter meant for more regular documents.
 
 use loony_core::{Bucket, ETag, OwnerId, UploadId};
@@ -10,6 +10,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 const XML_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+// Fixed by the wire protocol: clients match response elements by this exact
+// namespace, so it can't be renamed without breaking compatibility.
 const XMLNS: &str = "http://s3.amazonaws.com/doc/2006-03-01/";
 
 pub fn escape(s: &str) -> String {
@@ -115,7 +117,7 @@ fn object_summary_xml(object: &ObjectSummary) -> String {
     )
 }
 
-/// The quoted-ETag convention every S3 client expects on both headers and XML bodies.
+/// The quoted-ETag convention every standard client expects on both headers and XML bodies.
 pub fn quoted_etag(etag: &ETag) -> String {
     format!("\"{}\"", etag.as_str())
 }

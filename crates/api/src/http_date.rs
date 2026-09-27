@@ -1,5 +1,5 @@
 //! RFC 7231 "HTTP-date" formatting for the `Last-Modified` header — distinct from the
-//! RFC 3339 timestamps used in XML bodies (§59/§60). AWS CLI/boto3 parse this header
+//! RFC 3339 timestamps used in XML bodies (§59/§60). Standard clients/SDKs parse this header
 //! unconditionally on GetObject/HeadObject responses, so its absence is a hard
 //! compatibility break, not a cosmetic one.
 

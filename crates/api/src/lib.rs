@@ -1,4 +1,4 @@
-//! Thin Axum HTTP layer: S3 REST routes, XML (de)serialization, S3 error-code mapping.
+//! Thin Axum HTTP layer: LS3 REST routes, XML (de)serialization, LS3 error-code mapping.
 //! Delegates all business logic to `loony-object` (architecture.md §1) — handlers here do
 //! request parsing and response shaping only.
 //!

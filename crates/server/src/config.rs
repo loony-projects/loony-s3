@@ -16,15 +16,15 @@ pub enum Mode {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "server", about = "S3-compatible object storage server")]
+#[command(name = "server", about = "LS3 object storage server")]
 pub struct Cli {
-    /// Deployment mode. Overrides S3_MODE if given.
+    /// Deployment mode. Overrides LS3_MODE if given.
     #[arg(long, value_enum)]
     pub mode: Option<Mode>,
 
     /// This node's persistent id override. Normally omitted: the id is auto-generated
     /// on first start and persisted in NODE_ID under the data directory. Overrides
-    /// S3_NODE_ID.
+    /// LS3_NODE_ID.
     #[arg(long)]
     pub node_id: Option<String>,
 
@@ -36,7 +36,7 @@ pub struct Cli {
     #[arg(long)]
     pub bootstrap: bool,
 
-    /// Cluster id to mint when bootstrapping. Overrides S3_CLUSTER_ID.
+    /// Cluster id to mint when bootstrapping. Overrides LS3_CLUSTER_ID.
     #[arg(long)]
     pub cluster_id: Option<String>,
 }
@@ -54,11 +54,11 @@ pub enum ConfigError {
     },
 
     #[error(
-        "cluster mode requires exactly one of --join or --bootstrap (S3_JOIN / --bootstrap), not both or neither"
+        "cluster mode requires exactly one of --join or --bootstrap (LS3_JOIN / --bootstrap), not both or neither"
     )]
     ClusterJoinXorBootstrap,
 
-    #[error("--bootstrap requires a cluster id (--cluster-id or S3_CLUSTER_ID)")]
+    #[error("--bootstrap requires a cluster id (--cluster-id or LS3_CLUSTER_ID)")]
     BootstrapRequiresClusterId,
 }
 
@@ -103,33 +103,33 @@ impl Config {
         let mode = cli
             .mode
             .or_else(|| {
-                env.get("S3_MODE").and_then(|v| match v.as_str() {
+                env.get("LS3_MODE").and_then(|v| match v.as_str() {
                     "standalone" => Some(Mode::Standalone),
                     "cluster" => Some(Mode::Cluster),
                     _ => None,
                 })
             })
-            .ok_or(ConfigError::Missing("S3_MODE / --mode"))?;
+            .ok_or(ConfigError::Missing("LS3_MODE / --mode"))?;
 
         let data_dir = env
-            .get("S3_DATA_DIR")
+            .get("LS3_DATA_DIR")
             .map(PathBuf::from)
-            .ok_or(ConfigError::Missing("S3_DATA_DIR"))?;
+            .ok_or(ConfigError::Missing("LS3_DATA_DIR"))?;
 
-        let bind_addr = parse_addr_or_default(env, "S3_BIND_ADDR", "0.0.0.0:9000")?;
-        let admin_addr = parse_addr_or_default(env, "S3_ADMIN_ADDR", "0.0.0.0:9001")?;
+        let bind_addr = parse_addr_or_default(env, "LS3_BIND_ADDR", "0.0.0.0:9000")?;
+        let admin_addr = parse_addr_or_default(env, "LS3_ADMIN_ADDR", "0.0.0.0:9001")?;
         let region = env
-            .get("S3_REGION")
+            .get("LS3_REGION")
             .unwrap_or_else(|| "us-east-1".to_string());
 
-        let volume_paths = match env.get("S3_VOLUME_PATHS") {
+        let volume_paths = match env.get("LS3_VOLUME_PATHS") {
             Some(raw) => raw.split(',').map(|s| PathBuf::from(s.trim())).collect(),
             None => vec![data_dir.join("volumes").join("vol-0")],
         };
 
-        let node_id_override = match cli.node_id.or_else(|| env.get("S3_NODE_ID")) {
+        let node_id_override = match cli.node_id.or_else(|| env.get("LS3_NODE_ID")) {
             Some(raw) => Some(raw.parse::<NodeId>().map_err(|e| ConfigError::Invalid {
-                key: "S3_NODE_ID",
+                key: "LS3_NODE_ID",
                 value: raw,
                 reason: e.to_string(),
             })?),
@@ -137,13 +137,13 @@ impl Config {
         };
 
         let cluster = if mode == Mode::Cluster {
-            let cluster_addr = parse_addr_or_default(env, "S3_CLUSTER_ADDR", "0.0.0.0:9100")?;
+            let cluster_addr = parse_addr_or_default(env, "LS3_CLUSTER_ADDR", "0.0.0.0:9100")?;
             let advertise_addr = env
-                .get("S3_ADVERTISE_ADDR")
-                .ok_or(ConfigError::Missing("S3_ADVERTISE_ADDR"))?;
-            let cluster_id = cli.cluster_id.or_else(|| env.get("S3_CLUSTER_ID"));
-            let join = cli.join.or_else(|| env.get("S3_JOIN"));
-            let bootstrap = cli.bootstrap || env.get("S3_BOOTSTRAP").as_deref() == Some("true");
+                .get("LS3_ADVERTISE_ADDR")
+                .ok_or(ConfigError::Missing("LS3_ADVERTISE_ADDR"))?;
+            let cluster_id = cli.cluster_id.or_else(|| env.get("LS3_CLUSTER_ID"));
+            let join = cli.join.or_else(|| env.get("LS3_JOIN"));
+            let bootstrap = cli.bootstrap || env.get("LS3_BOOTSTRAP").as_deref() == Some("true");
 
             if join.is_some() == bootstrap {
                 return Err(ConfigError::ClusterJoinXorBootstrap);
@@ -216,8 +216,8 @@ mod tests {
     #[test]
     fn standalone_loads_with_just_mode_and_data_dir() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "standalone"),
-            ("S3_DATA_DIR", "/data"),
+            ("LS3_MODE", "standalone"),
+            ("LS3_DATA_DIR", "/data"),
         ]));
         let config = Config::load(empty_cli(), &env).unwrap();
 
@@ -234,8 +234,8 @@ mod tests {
     #[test]
     fn cli_mode_overrides_env() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "standalone"),
-            ("S3_DATA_DIR", "/data"),
+            ("LS3_MODE", "standalone"),
+            ("LS3_DATA_DIR", "/data"),
         ]));
         let cli = Cli {
             mode: Some(Mode::Standalone),
@@ -247,30 +247,30 @@ mod tests {
 
     #[test]
     fn missing_mode_is_an_error() {
-        let env = FakeEnv(HashMap::from([("S3_DATA_DIR", "/data")]));
+        let env = FakeEnv(HashMap::from([("LS3_DATA_DIR", "/data")]));
         let err = Config::load(empty_cli(), &env).unwrap_err();
-        assert!(matches!(err, ConfigError::Missing("S3_MODE / --mode")));
+        assert!(matches!(err, ConfigError::Missing("LS3_MODE / --mode")));
     }
 
     #[test]
     fn missing_data_dir_is_an_error() {
-        let env = FakeEnv(HashMap::from([("S3_MODE", "standalone")]));
+        let env = FakeEnv(HashMap::from([("LS3_MODE", "standalone")]));
         let err = Config::load(empty_cli(), &env).unwrap_err();
-        assert!(matches!(err, ConfigError::Missing("S3_DATA_DIR")));
+        assert!(matches!(err, ConfigError::Missing("LS3_DATA_DIR")));
     }
 
     #[test]
     fn invalid_bind_addr_is_rejected() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "standalone"),
-            ("S3_DATA_DIR", "/data"),
-            ("S3_BIND_ADDR", "not-an-address"),
+            ("LS3_MODE", "standalone"),
+            ("LS3_DATA_DIR", "/data"),
+            ("LS3_BIND_ADDR", "not-an-address"),
         ]));
         let err = Config::load(empty_cli(), &env).unwrap_err();
         assert!(matches!(
             err,
             ConfigError::Invalid {
-                key: "S3_BIND_ADDR",
+                key: "LS3_BIND_ADDR",
                 ..
             }
         ));
@@ -279,16 +279,16 @@ mod tests {
     #[test]
     fn cluster_mode_requires_advertise_addr_and_join_xor_bootstrap() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "cluster"),
-            ("S3_DATA_DIR", "/data"),
+            ("LS3_MODE", "cluster"),
+            ("LS3_DATA_DIR", "/data"),
         ]));
         let err = Config::load(empty_cli(), &env).unwrap_err();
-        assert!(matches!(err, ConfigError::Missing("S3_ADVERTISE_ADDR")));
+        assert!(matches!(err, ConfigError::Missing("LS3_ADVERTISE_ADDR")));
 
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "cluster"),
-            ("S3_DATA_DIR", "/data"),
-            ("S3_ADVERTISE_ADDR", "node-01:9100"),
+            ("LS3_MODE", "cluster"),
+            ("LS3_DATA_DIR", "/data"),
+            ("LS3_ADVERTISE_ADDR", "node-01:9100"),
         ]));
         let err = Config::load(empty_cli(), &env).unwrap_err();
         assert!(matches!(err, ConfigError::ClusterJoinXorBootstrap));
@@ -305,9 +305,9 @@ mod tests {
     #[test]
     fn bootstrap_without_cluster_id_is_rejected() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "cluster"),
-            ("S3_DATA_DIR", "/data"),
-            ("S3_ADVERTISE_ADDR", "node-01:9100"),
+            ("LS3_MODE", "cluster"),
+            ("LS3_DATA_DIR", "/data"),
+            ("LS3_ADVERTISE_ADDR", "node-01:9100"),
         ]));
         let cli = Cli {
             bootstrap: true,
@@ -320,9 +320,9 @@ mod tests {
     #[test]
     fn cluster_join_loads_successfully() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "cluster"),
-            ("S3_DATA_DIR", "/data"),
-            ("S3_ADVERTISE_ADDR", "node-03:9100"),
+            ("LS3_MODE", "cluster"),
+            ("LS3_DATA_DIR", "/data"),
+            ("LS3_ADVERTISE_ADDR", "node-03:9100"),
         ]));
         let cli = Cli {
             join: Some("http://node-01:9100".into()),
@@ -338,9 +338,9 @@ mod tests {
     #[test]
     fn explicit_volume_paths_are_split_on_comma() {
         let env = FakeEnv(HashMap::from([
-            ("S3_MODE", "standalone"),
-            ("S3_DATA_DIR", "/data"),
-            ("S3_VOLUME_PATHS", "/mnt/a, /mnt/b"),
+            ("LS3_MODE", "standalone"),
+            ("LS3_DATA_DIR", "/data"),
+            ("LS3_VOLUME_PATHS", "/mnt/a, /mnt/b"),
         ]));
         let config = Config::load(empty_cli(), &env).unwrap();
         assert_eq!(

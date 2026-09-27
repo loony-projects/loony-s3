@@ -7,30 +7,30 @@ before building anything on top of this.
 ## Bringing up a cluster
 
 Bootstrap the first node, then have others join it. Each node needs its own
-`S3_DATA_DIR`, its own `S3_BIND_ADDR`/`S3_CLUSTER_ADDR`, and a shared
-`S3_CLUSTER_TOKEN`.
+`LS3_DATA_DIR`, its own `LS3_BIND_ADDR`/`LS3_CLUSTER_ADDR`, and a shared
+`LS3_CLUSTER_TOKEN`.
 
 ```bash
 # Node 1: bootstrap a brand-new cluster
-S3_CLUSTER_TOKEN=shared-secret S3_MODE=cluster S3_CLUSTER_ID=my-cluster \
-  S3_DATA_DIR=/tmp/loony-node1 S3_BIND_ADDR=127.0.0.1:9000 \
-  S3_CLUSTER_ADDR=127.0.0.1:9100 S3_ADVERTISE_ADDR=127.0.0.1:9100 \
+LS3_CLUSTER_TOKEN=shared-secret LS3_MODE=cluster LS3_CLUSTER_ID=my-cluster \
+  LS3_DATA_DIR=/tmp/loony-node1 LS3_BIND_ADDR=127.0.0.1:9000 \
+  LS3_CLUSTER_ADDR=127.0.0.1:9100 LS3_ADVERTISE_ADDR=127.0.0.1:9100 \
   cargo run --bin loony-server -- --mode cluster --bootstrap
 
 # Node 2: join through node 1
-S3_CLUSTER_TOKEN=shared-secret S3_MODE=cluster \
-  S3_DATA_DIR=/tmp/loony-node2 S3_BIND_ADDR=127.0.0.1:9001 \
-  S3_CLUSTER_ADDR=127.0.0.1:9101 S3_ADVERTISE_ADDR=127.0.0.1:9101 \
+LS3_CLUSTER_TOKEN=shared-secret LS3_MODE=cluster \
+  LS3_DATA_DIR=/tmp/loony-node2 LS3_BIND_ADDR=127.0.0.1:9001 \
+  LS3_CLUSTER_ADDR=127.0.0.1:9101 LS3_ADVERTISE_ADDR=127.0.0.1:9101 \
   cargo run --bin loony-server -- --mode cluster --join 127.0.0.1:9100
 ```
 
-`S3_ADVERTISE_ADDR` is what gets told to *other* nodes — it has to be reachable from
-them, not just from `localhost`. `--bootstrap` requires an empty `S3_DATA_DIR` and a
-cluster id (`--cluster-id`/`S3_CLUSTER_ID`); `--join` learns the cluster id from the seed
+`LS3_ADVERTISE_ADDR` is what gets told to *other* nodes — it has to be reachable from
+them, not just from `localhost`. `--bootstrap` requires an empty `LS3_DATA_DIR` and a
+cluster id (`--cluster-id`/`LS3_CLUSTER_ID`); `--join` learns the cluster id from the seed
 node's response instead. See [configuration.md](configuration.md) for the full option
 list.
 
-Each node still serves the S3 API on its own `S3_BIND_ADDR` — there's no built-in load
+Each node still serves the LS3 API on its own `LS3_BIND_ADDR` — there's no built-in load
 balancer or single cluster-wide endpoint; point clients at whichever node(s) you want to
 receive traffic (see the next section for why this matters more than it would in a fully
 built-out cluster).
@@ -83,7 +83,7 @@ distributed right now:
   to local disk or, over the existing internal RPC transport (`RemoteShardStore`,
   Phase 6), to whichever node actually holds it — resolved via a `CachedNodeResolver`
   that refreshes from `MetadataStore::list_nodes()` every 5 seconds. Verified against
-  two real, separate `loony-server` processes with the AWS CLI: a multi-megabyte PUT
+  two real, separate `loony-server` processes with a standard client: a multi-megabyte PUT
   issued against node 1 leaves shard files on *both* nodes' local disks, and `GET` of
   that object issued against *either* node returns byte-identical data (checked with
   `sha256sum` against the source file in both directions).
@@ -105,7 +105,7 @@ PUT still requires every planned shard write to succeed — there's no partial
 write-quorum/abort behavior from architecture.md §11, and no degraded-write
 healing-job enqueueing from §12-14; both remain future work.
 
-Internal RPC authentication is a shared bearer token (`S3_CLUSTER_TOKEN`), checked in
+Internal RPC authentication is a shared bearer token (`LS3_CLUSTER_TOKEN`), checked in
 constant time — not the mutual TLS the architecture doc commits to for a production
 deployment. Fine for a trusted local network or CI, not for anything exposed beyond
 that.

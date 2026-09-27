@@ -28,10 +28,10 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-// The backend's ListObjectsV2 response (like real S3's) doesn't carry a per-object
+// The backend's ListObjectsV2 response (like the upstream protocol's) doesn't carry a per-object
 // content type -- that's only known from a HeadObject/GetObject call, which listing
 // every row here would mean one request per row. Inferring from the key's extension is
-// what most S3 browser UIs do for the same reason.
+// what most object-storage browser UIs do for the same reason.
 function fileIconForKey(key: string) {
   const ext = key.split('.').pop()?.toLowerCase() ?? '';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) return <Image className="w-4 h-4 text-purple-500" />;

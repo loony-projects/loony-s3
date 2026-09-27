@@ -6,6 +6,30 @@ use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
+// Wire-protocol literals fixed by the SigV4 spec: every standard client computes its
+// signature from these exact bytes, so they can't be renamed without breaking
+// compatibility. This is the only place they're spelled out.
+pub const SIGNING_ALGORITHM: &str = "AWS4-HMAC-SHA256";
+pub const SIGNING_KEY_PREFIX: &str = "AWS4";
+pub const SCOPE_TERMINATOR: &str = "aws4_request";
+pub const SERVICE: &str = "s3";
+
+/// Derives the SigV4 signing key and returns the hex signature of `string_to_sign`.
+pub fn compute_signature(
+    secret_key: &str,
+    date: &str,
+    region: &str,
+    service: &str,
+    string_to_sign: &str,
+) -> String {
+    let k_secret = format!("{SIGNING_KEY_PREFIX}{secret_key}");
+    let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
+    let k_region = hmac_sha256(&k_date, region.as_bytes());
+    let k_service = hmac_sha256(&k_region, service.as_bytes());
+    let k_signing = hmac_sha256(&k_service, SCOPE_TERMINATOR.as_bytes());
+    hex(&hmac_sha256(&k_signing, string_to_sign.as_bytes()))
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -57,8 +81,8 @@ pub fn percent_decode(s: &str) -> String {
 }
 
 /// Canonicalize a request path: percent-decode once (normalizing whatever encoding the
-/// client used) then re-encode per SigV4 rules. This is S3's own documented quirk vs.
-/// most other AWS services: paths are single-, not double-, encoded.
+/// client used) then re-encode per SigV4 rules. The `s3` signing service is the documented
+/// exception among SigV4 services here: paths are single-, not double-, encoded.
 pub fn canonical_uri(raw_path: &str) -> String {
     let decoded = percent_decode(raw_path);
     let encoded = uri_encode(&decoded, false);

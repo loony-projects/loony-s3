@@ -6,14 +6,11 @@
 use time::{Duration, OffsetDateTime};
 
 use crate::canonical::{
-    canonical_headers, canonical_query_string, canonical_uri, constant_time_eq, hmac_sha256,
-    parse_query_string, sha256_hex,
+    SCOPE_TERMINATOR, SERVICE, SIGNING_ALGORITHM, canonical_headers, canonical_query_string,
+    canonical_uri, compute_signature, constant_time_eq, parse_query_string, sha256_hex,
 };
 use crate::credential::CredentialProvider;
 use loony_core::OwnerId;
-
-const ALGORITHM: &str = "AWS4-HMAC-SHA256";
-const SERVICE: &str = "s3";
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum AuthError {
@@ -93,7 +90,7 @@ struct ParsedAuth {
 fn parse_authorization_header(value: &str) -> Result<ParsedAuth, AuthError> {
     let rest = value
         .trim()
-        .strip_prefix(ALGORITHM)
+        .strip_prefix(SIGNING_ALGORITHM)
         .ok_or(AuthError::UnsupportedAlgorithm)?;
 
     let mut credential = None;
@@ -123,7 +120,7 @@ fn parse_authorization_header(value: &str) -> Result<ParsedAuth, AuthError> {
     })
 }
 
-/// `{access_key}/{date}/{region}/{service}/aws4_request`
+/// `{access_key}/{date}/{region}/{service}/{SCOPE_TERMINATOR}`
 fn parse_credential_scope(credential: &str) -> Result<(String, String, String, String), AuthError> {
     let mut scope = credential.splitn(5, '/');
     let access_key = scope.next().ok_or(AuthError::Malformed)?.to_string();
@@ -131,7 +128,7 @@ fn parse_credential_scope(credential: &str) -> Result<(String, String, String, S
     let region = scope.next().ok_or(AuthError::Malformed)?.to_string();
     let service = scope.next().ok_or(AuthError::Malformed)?.to_string();
     let terminator = scope.next().ok_or(AuthError::Malformed)?;
-    if terminator != "aws4_request" {
+    if terminator != SCOPE_TERMINATOR {
         return Err(AuthError::Malformed);
     }
     Ok((access_key, date, region, service))
@@ -188,24 +185,9 @@ fn build_string_to_sign(
     service: &str,
     canonical_request: &str,
 ) -> String {
-    let scope = format!("{date}/{region}/{service}/aws4_request");
+    let scope = format!("{date}/{region}/{service}/{SCOPE_TERMINATOR}");
     let hashed = sha256_hex(canonical_request.as_bytes());
-    format!("{ALGORITHM}\n{amz_date}\n{scope}\n{hashed}")
-}
-
-fn compute_signature(
-    secret_key: &str,
-    date: &str,
-    region: &str,
-    service: &str,
-    string_to_sign: &str,
-) -> String {
-    let k_secret = format!("AWS4{secret_key}");
-    let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
-    let k_region = hmac_sha256(&k_date, region.as_bytes());
-    let k_service = hmac_sha256(&k_region, service.as_bytes());
-    let k_signing = hmac_sha256(&k_service, b"aws4_request");
-    crate::canonical::hex(&hmac_sha256(&k_signing, string_to_sign.as_bytes()))
+    format!("{SIGNING_ALGORITHM}\n{amz_date}\n{scope}\n{hashed}")
 }
 
 async fn verify_header(
@@ -290,7 +272,7 @@ async fn verify_presigned(
 
     let algorithm = get("X-Amz-Algorithm")
         .ok_or_else(|| AuthError::MissingQueryParam("X-Amz-Algorithm".into()))?;
-    if algorithm != ALGORITHM {
+    if algorithm != SIGNING_ALGORITHM {
         return Err(AuthError::UnsupportedAlgorithm);
     }
     let credential = get("X-Amz-Credential")
@@ -461,7 +443,7 @@ mod tests {
             "GET",
             "/bucket/key",
             "",
-            &[("host", "s3.example.com")],
+            &[("host", "ls3.example.com")],
             "AKIATEST",
             "test-secret-key",
             "us-east-1",
@@ -494,7 +476,7 @@ mod tests {
             "GET",
             "/bucket/key",
             "",
-            &[("host", "s3.example.com")],
+            &[("host", "ls3.example.com")],
             "AKIATEST",
             "test-secret-key",
             "us-east-1",
@@ -533,7 +515,7 @@ mod tests {
             "GET",
             "/bucket/key",
             "",
-            &[("host", "s3.example.com")],
+            &[("host", "ls3.example.com")],
             "AKIATEST",
             "test-secret-key",
             "us-east-1",
@@ -566,7 +548,7 @@ mod tests {
             "GET",
             "/bucket/key",
             "",
-            &[("host", "s3.example.com")],
+            &[("host", "ls3.example.com")],
             "AKIAWRONG",
             "some-other-secret",
             "us-east-1",
@@ -599,7 +581,7 @@ mod tests {
             "GET",
             "/bucket/key",
             "",
-            &[("host", "s3.example.com")],
+            &[("host", "ls3.example.com")],
             "AKIATEST",
             "test-secret-key",
             "us-east-1",
@@ -632,7 +614,7 @@ mod tests {
             "GET",
             "/bucket/key",
             "",
-            &[("host", "s3.example.com")],
+            &[("host", "ls3.example.com")],
             "AKIATEST",
             "wrong-secret",
             "us-east-1",
@@ -667,7 +649,7 @@ mod tests {
         amz_date: &str,
         expires: i64,
     ) -> String {
-        let headers = vec![("host".to_string(), "s3.example.com".to_string())];
+        let headers = vec![("host".to_string(), "ls3.example.com".to_string())];
         crate::sign::sign_presigned_query(
             method,
             path,
@@ -693,7 +675,7 @@ mod tests {
             "20250101T120000Z",
             3600,
         );
-        let headers = vec![("host".to_string(), "s3.example.com".to_string())];
+        let headers = vec![("host".to_string(), "ls3.example.com".to_string())];
         let parts = RequestParts {
             method: "GET",
             path: "/bucket/key",
@@ -725,7 +707,7 @@ mod tests {
             "20250101T120000Z",
             3600,
         );
-        let headers = vec![("host".to_string(), "s3.example.com".to_string())];
+        let headers = vec![("host".to_string(), "ls3.example.com".to_string())];
         let parts = RequestParts {
             method: "GET",
             path: "/bucket/key",
@@ -758,7 +740,7 @@ mod tests {
             3600,
         );
         let tampered = query.replace("X-Amz-Expires=3600", "X-Amz-Expires=360000");
-        let headers = vec![("host".to_string(), "s3.example.com".to_string())];
+        let headers = vec![("host".to_string(), "ls3.example.com".to_string())];
         let parts = RequestParts {
             method: "GET",
             path: "/bucket/key",

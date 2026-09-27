@@ -1,5 +1,5 @@
 import { signedFetch, ApiError } from './client';
-import { parseS3Error } from './xml';
+import { parseLs3Error } from './xml';
 
 /**
  * SigV4 has no token-issuance endpoint -- unlike the old JWT flow, there's nothing to
@@ -17,6 +17,6 @@ export async function verifyCredentials(
   if (res.ok) return;
 
   const body = await res.text().catch(() => '');
-  const parsed = parseS3Error(body);
+  const parsed = parseLs3Error(body);
   throw new ApiError(res.status, parsed?.message || res.statusText || 'Could not reach the server', parsed?.code);
 }

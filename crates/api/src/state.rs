@@ -9,6 +9,6 @@ pub struct AppState {
     pub objects: Arc<ObjectService>,
     pub credentials: Arc<dyn CredentialProvider>,
     /// SigV4 region scope this server verifies requests against (prompt §52 credential
-    /// scope `{date}/{region}/{service}/aws4_request`).
+    /// scope `{date}/{region}/{service}/<terminator>`).
     pub region: String,
 }

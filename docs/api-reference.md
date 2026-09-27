@@ -1,8 +1,9 @@
-# S3 API reference
+# LS3 API reference
 
-What `loony-s3` actually implements: routes, auth, validation rules, durability
-behavior, and error codes. This describes *this server's* behavior precisely — for the
-general S3 protocol itself, see AWS's own S3 API reference.
+What `loony-ls3` actually implements: routes, auth, validation rules, durability
+behavior, and error codes. This describes *this server's* behavior precisely. The LS3
+API is wire-compatible with S3; for the general protocol itself, see the upstream S3 API
+reference.
 
 ## Supported operations
 
@@ -30,11 +31,11 @@ virtual-hosted-style (`{bucket}.host`) routing.
 
 - **Range requests** — the `Range` header on `GetObject` is silently ignored; the full
   object is always returned rather than an error or a `206 Partial Content`. This means
-  the AWS CLI's high-level `s3 cp` **download** of a large object (which switches to
-  concurrent ranged GETs above its own size threshold, independent of multipart) will
-  produce a corrupted local file — each parallel request gets the *full* object instead
-  of its slice. Use `s3api get-object` (a single plain GET) for large downloads until
-  Range support lands, or `s3 cp` for anything under that threshold.
+  any client that downloads large objects with parallel ranged GETs (many CLIs do,
+  above some size threshold, independent of multipart) will produce a corrupted local
+  file — each parallel request gets the *full* object instead of its slice. Disable
+  parallel downloads until Range support lands (e.g. rclone's
+  `--multi-thread-streams 0`), or use a single plain GET.
 - **`x-amz-meta-*` response headers** — user metadata given to `PutObject`/
   `CreateMultipartUpload` is stored and preserved correctly (round-trips through a
   multipart Complete too), but `GetObject`/`HeadObject` never echo it back as response
@@ -47,14 +48,14 @@ virtual-hosted-style (`{bucket}.host`) routing.
 
 ## Authentication
 
-SigV4 only, both forms real S3 supports:
+SigV4 only, both forms the upstream protocol supports:
 
-- **Header-based**: an `Authorization: AWS4-HMAC-SHA256 Credential=...` header plus
+- **Header-based**: an `Authorization: <signing algorithm> Credential=...` header plus
   `x-amz-date` and `x-amz-content-sha256`.
 - **Presigned query string**: `X-Amz-Algorithm`/`X-Amz-Credential`/`X-Amz-Signature`
   etc. as query parameters — no `Authorization` header needed by the party using the
-  link. Presigned URLs are generated entirely client-side (the AWS CLI's `s3 presign`,
-  an SDK's presigner, or the web UI's "copy link" action) — there's no server endpoint
+  link. Presigned URLs are generated entirely client-side (`rclone link`, an SDK's
+  presigner, or the web UI's "copy link" action) — there's no server endpoint
   that mints one for you.
 
 Every bucket and object is owned by the credential that created it (ownership-based
@@ -62,13 +63,13 @@ authorization, not ACLs) — a different credential gets `AccessDenied`/`NoSuchB
 rather than seeing another owner's data, even if it can prove it knows the bucket name.
 
 Credentials are managed as records in the metadata store, keyed by access key. The one
-guaranteed to exist is whatever `S3_ROOT_ACCESS_KEY`/`S3_ROOT_SECRET_KEY` (or the
+guaranteed to exist is whatever `LS3_ROOT_ACCESS_KEY`/`LS3_ROOT_SECRET_KEY` (or the
 dev-derived fallback) resolves to at startup — see [configuration.md](configuration.md).
 There's no API to create additional credentials yet.
 
 ## Naming rules
 
-**Bucket names** — enforced exactly, same as real S3:
+**Bucket names** — enforced exactly, same as the upstream protocol:
 - 3–63 characters
 - lowercase letters, digits, dots (`.`), and hyphens (`-`) only
 - must start and end with a lowercase letter or digit
@@ -92,7 +93,7 @@ configurable per-request yet:
   fixed overhead of erasure coding isn't worth it at that size.
 - **Objects 512 KiB and larger**: erasure-coded, streamed in stripes. The exact
   `(data shards, parity shards)` split depends on how many local volumes
-  (`S3_VOLUME_PATHS`) the node has, so a small setup degrades gracefully instead of
+  (`LS3_VOLUME_PATHS`) the node has, so a small setup degrades gracefully instead of
   co-locating multiple shards of one stripe on the same volume:
 
   | Volumes available | Scheme (data+parity) |
@@ -110,7 +111,7 @@ failing, as long as enough shards survive for the chosen scheme.
 
 ## Error responses
 
-Errors are XML `<Error>` bodies matching real S3's shape and vocabulary:
+Errors are XML `<Error>` bodies matching the upstream protocol's shape and vocabulary:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -143,6 +144,6 @@ Errors are XML `<Error>` bodies matching real S3's shape and vocabulary:
 
 `GetObject`/`HeadObject` responses include `ETag` (content hash — MD5-based for a
 single-part object, `hex(MD5(concat(part MD5s)))-N` for an object completed via
-multipart, AWS's own documented convention) and `Last-Modified` in the format the AWS
-CLI's transfer manager expects. Every response also carries `x-amz-request-id` (a
+multipart, the upstream protocol's own documented convention) and `Last-Modified` in the format standard
+clients' transfer managers expect. Every response also carries `x-amz-request-id` (a
 UUIDv7), useful for correlating a client-side error against the server's logs.

@@ -6,11 +6,9 @@
 use time::OffsetDateTime;
 
 use crate::canonical::{
-    canonical_headers, canonical_query_string, canonical_uri, hex, hmac_sha256, sha256_hex,
+    SCOPE_TERMINATOR, SERVICE, SIGNING_ALGORITHM, canonical_headers, canonical_query_string,
+    canonical_uri, compute_signature, sha256_hex,
 };
-
-const ALGORITHM: &str = "AWS4-HMAC-SHA256";
-const SERVICE: &str = "s3";
 
 fn build_canonical_request(
     method: &str,
@@ -27,21 +25,6 @@ fn build_canonical_request(
     format!(
         "{method}\n{canonical_uri}\n{canonical_qs}\n{canonical_hdrs}\n{signed_headers_line}\n{payload_hash}"
     )
-}
-
-fn compute_signature(
-    secret_key: &str,
-    date: &str,
-    region: &str,
-    service: &str,
-    string_to_sign: &str,
-) -> String {
-    let k_secret = format!("AWS4{secret_key}");
-    let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
-    let k_region = hmac_sha256(&k_date, region.as_bytes());
-    let k_service = hmac_sha256(&k_region, service.as_bytes());
-    let k_signing = hmac_sha256(&k_service, b"aws4_request");
-    hex(&hmac_sha256(&k_signing, string_to_sign.as_bytes()))
 }
 
 /// The `x-amz-date` value for "now", in the `YYYYMMDDTHHMMSSZ` format SigV4 requires.
@@ -90,13 +73,13 @@ pub fn sign_header_auth(
         payload_hash,
     );
     let string_to_sign = format!(
-        "{ALGORITHM}\n{amz_date}\n{date}/{region}/{SERVICE}/aws4_request\n{}",
+        "{SIGNING_ALGORITHM}\n{amz_date}\n{date}/{region}/{SERVICE}/{SCOPE_TERMINATOR}\n{}",
         sha256_hex(canonical_request.as_bytes())
     );
     let signature = compute_signature(secret_key, date, region, SERVICE, &string_to_sign);
 
     format!(
-        "{ALGORITHM} Credential={access_key}/{date}/{region}/{SERVICE}/aws4_request, SignedHeaders={}, Signature={signature}",
+        "{SIGNING_ALGORITHM} Credential={access_key}/{date}/{region}/{SERVICE}/{SCOPE_TERMINATOR}, SignedHeaders={}, Signature={signature}",
         signed_headers.join(";")
     )
 }
@@ -116,9 +99,9 @@ pub fn sign_presigned_query(
     expires_secs: i64,
 ) -> String {
     let date = &amz_date[0..8];
-    let credential = format!("{access_key}/{date}/{region}/{SERVICE}/aws4_request");
+    let credential = format!("{access_key}/{date}/{region}/{SERVICE}/{SCOPE_TERMINATOR}");
     let mut query_pairs = vec![
-        ("X-Amz-Algorithm".to_string(), ALGORITHM.to_string()),
+        ("X-Amz-Algorithm".to_string(), SIGNING_ALGORITHM.to_string()),
         ("X-Amz-Credential".to_string(), credential),
         ("X-Amz-Date".to_string(), amz_date.to_string()),
         ("X-Amz-Expires".to_string(), expires_secs.to_string()),
@@ -135,7 +118,7 @@ pub fn sign_presigned_query(
         "UNSIGNED-PAYLOAD",
     );
     let string_to_sign = format!(
-        "{ALGORITHM}\n{amz_date}\n{date}/{region}/{SERVICE}/aws4_request\n{}",
+        "{SIGNING_ALGORITHM}\n{amz_date}\n{date}/{region}/{SERVICE}/{SCOPE_TERMINATOR}\n{}",
         sha256_hex(canonical_request.as_bytes())
     );
     let signature = compute_signature(secret_key, date, region, SERVICE, &string_to_sign);

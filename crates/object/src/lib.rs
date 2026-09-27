@@ -9,5 +9,5 @@ mod object_service;
 mod stripe_reader;
 
 pub use bucket_service::BucketService;
-pub use error::S3Error;
+pub use error::Ls3Error;
 pub use object_service::{ListObjectsParams, ObjectService};

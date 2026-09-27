@@ -1,6 +1,6 @@
 import { request, presignedGetUrl, getCredentials, ApiError } from './client';
 import { amzDateNow, signHeaderAuth, buildQueryString } from './sigv4';
-import { parseListBucketResult, parseS3Error, type ListBucketResult, type ObjectSummary } from './xml';
+import { parseListBucketResult, parseLs3Error, type ListBucketResult, type ObjectSummary } from './xml';
 
 export type { ListBucketResult, ObjectSummary };
 
@@ -85,7 +85,7 @@ export function uploadObject(
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve({ etag: xhr.getResponseHeader('etag')?.replace(/^"|"$/g, '') ?? '' });
         } else {
-          const parsed = parseS3Error(xhr.responseText);
+          const parsed = parseLs3Error(xhr.responseText);
           reject(new ApiError(xhr.status, parsed?.message ?? xhr.statusText, parsed?.code));
         }
       };

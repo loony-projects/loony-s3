@@ -44,7 +44,7 @@ export function LoginPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-blue-600 rounded-2xl mb-4 shadow-lg shadow-blue-200">
             <Database className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Loony S3</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Loony LS3</h1>
           <p className="text-sm text-gray-500 mt-1">Object Storage Dashboard</p>
         </div>
 
@@ -123,7 +123,7 @@ export function LoginPage() {
           </form>
 
           <p className="mt-4 text-xs text-center text-gray-400">
-            Requests are signed with AWS SigV4 — your secret key never leaves this browser
+            Requests are signed with SigV4 — your secret key never leaves this browser
           </p>
         </div>
       </div>

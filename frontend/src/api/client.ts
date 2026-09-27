@@ -1,6 +1,6 @@
 import { useAuthStore } from '@/store/useAuthStore';
 import { amzDateNow, signHeaderAuth, signPresignedQuery, sha256Hex, EMPTY_BODY_SHA256, buildQueryString } from './sigv4';
-import { parseS3Error } from './xml';
+import { parseLs3Error } from './xml';
 
 export class ApiError extends Error {
   constructor(
@@ -42,7 +42,7 @@ export interface SignedRequestOptions {
 }
 
 /**
- * Signs and sends one S3 request. Returns the raw `Response` -- callers parse XML,
+ * Signs and sends one LS3 request. Returns the raw `Response` -- callers parse XML,
  * read headers, or stream the body as appropriate for that endpoint, the same
  * separation of concerns `loony-api`'s handlers keep on the server side.
  */
@@ -101,14 +101,14 @@ export async function signedFetch(method: string, path: string, opts: SignedRequ
   return fetch(url, { method, headers: fetchHeaders, body: opts.body });
 }
 
-/** `signedFetch`, but throwing `ApiError` (parsed from the S3 `<Error>` body when
+/** `signedFetch`, but throwing `ApiError` (parsed from the LS3 `<Error>` body when
  * present) for any non-2xx/3xx/204 response, matching the old client's ergonomics. */
 export async function request(method: string, path: string, opts: SignedRequestOptions = {}): Promise<Response> {
   const res = await signedFetch(method, path, opts);
   if (res.ok) return res;
 
   const body = await res.text().catch(() => '');
-  const parsed = parseS3Error(body);
+  const parsed = parseLs3Error(body);
   throw new ApiError(res.status, parsed?.message || res.statusText, parsed?.code);
 }
 

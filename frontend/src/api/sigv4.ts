@@ -1,11 +1,16 @@
-// Browser-native AWS SigV4 request signing (canonical request, credential scope,
+// Browser-native SigV4 request signing (canonical request, credential scope,
 // HMAC-SHA256 signing-key chain), mirroring the Rust backend's implementation in
 // crates/auth/src/canonical.rs and sign.rs byte-for-byte so requests signed here
 // verify there. Uses only Web Crypto (`crypto.subtle`) -- no signing library needed,
-// same reasoning as the backend using only `hmac`/`sha2` directly rather than an AWS
+// same reasoning as the backend using only `hmac`/`sha2` directly rather than a vendor
 // SDK.
 
-const ALGORITHM = 'AWS4-HMAC-SHA256';
+// Wire-protocol literals fixed by the SigV4 spec -- every standard client signs with
+// these exact bytes, so they can't be renamed without breaking compatibility. This is
+// the only place they're spelled out (mirrors crates/auth/src/canonical.rs).
+const SIGNING_ALGORITHM = 'AWS4-HMAC-SHA256';
+const SIGNING_KEY_PREFIX = 'AWS4';
+const SCOPE_TERMINATOR = 'aws4_request';
 const SERVICE = 's3';
 
 /** `sha256("")` -- used as the payload hash for every empty-body request (GET/HEAD/DELETE). */
@@ -104,11 +109,11 @@ async function computeSignature(
   region: string,
   stringToSign: string,
 ): Promise<string> {
-  const kSecret = textEncoder.encode(`AWS4${secretKey}`);
+  const kSecret = textEncoder.encode(`${SIGNING_KEY_PREFIX}${secretKey}`);
   const kDate = await hmacSha256(kSecret, date);
   const kRegion = await hmacSha256(kDate, region);
   const kService = await hmacSha256(kRegion, SERVICE);
-  const kSigning = await hmacSha256(kService, 'aws4_request');
+  const kSigning = await hmacSha256(kService, SCOPE_TERMINATOR);
   const signature = await hmacSha256(kSigning, stringToSign);
   return toHex(signature);
 }
@@ -147,10 +152,10 @@ export async function signHeaderAuth(p: SignHeaderAuthParams): Promise<string> {
     p.signedHeaders,
     p.payloadHash,
   );
-  const scope = `${date}/${p.region}/${SERVICE}/aws4_request`;
-  const stringToSign = `${ALGORITHM}\n${p.amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
+  const scope = `${date}/${p.region}/${SERVICE}/${SCOPE_TERMINATOR}`;
+  const stringToSign = `${SIGNING_ALGORITHM}\n${p.amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
   const signature = await computeSignature(p.secretKey, date, p.region, stringToSign);
-  return `${ALGORITHM} Credential=${p.accessKey}/${scope}, SignedHeaders=${p.signedHeaders.join(';')}, Signature=${signature}`;
+  return `${SIGNING_ALGORITHM} Credential=${p.accessKey}/${scope}, SignedHeaders=${p.signedHeaders.join(';')}, Signature=${signature}`;
 }
 
 export interface SignPresignedQueryParams {
@@ -170,10 +175,10 @@ export interface SignPresignedQueryParams {
 /** Builds a presigned URL's full query string, including the final `X-Amz-Signature`. */
 export async function signPresignedQuery(p: SignPresignedQueryParams): Promise<string> {
   const date = p.amzDate.slice(0, 8);
-  const credential = `${p.accessKey}/${date}/${p.region}/${SERVICE}/aws4_request`;
+  const credential = `${p.accessKey}/${date}/${p.region}/${SERVICE}/${SCOPE_TERMINATOR}`;
   const query: Record<string, string> = {
     ...(p.extraQuery ?? {}),
-    'X-Amz-Algorithm': ALGORITHM,
+    'X-Amz-Algorithm': SIGNING_ALGORITHM,
     'X-Amz-Credential': credential,
     'X-Amz-Date': p.amzDate,
     'X-Amz-Expires': String(p.expiresSecs),
@@ -181,8 +186,8 @@ export async function signPresignedQuery(p: SignPresignedQueryParams): Promise<s
   };
 
   const canonicalRequest = await buildCanonicalRequest(p.method, p.path, query, p.headers, p.signedHeaders, 'UNSIGNED-PAYLOAD');
-  const scope = `${date}/${p.region}/${SERVICE}/aws4_request`;
-  const stringToSign = `${ALGORITHM}\n${p.amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
+  const scope = `${date}/${p.region}/${SERVICE}/${SCOPE_TERMINATOR}`;
+  const stringToSign = `${SIGNING_ALGORITHM}\n${p.amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
   const signature = await computeSignature(p.secretKey, date, p.region, stringToSign);
 
   return buildQueryString({ ...query, 'X-Amz-Signature': signature });

@@ -17,7 +17,7 @@ export async function listBuckets(): Promise<Bucket[]> {
 // `signedFetch` (via `uriEncode` in sigv4.ts) is the only percent-encoding pass, both
 // for the canonical request it signs and the URL it actually sends. Pre-encoding here
 // would double-escape (`%20` -> `%2520`) and desync the two. Bucket names are already
-// restricted to a safe charset by S3 naming rules, so this is just consistency with
+// restricted to a safe charset by LS3 naming rules, so this is just consistency with
 // how object keys (arbitrary bytes) must be handled in objects.ts.
 
 export async function createBucket(name: string): Promise<void> {

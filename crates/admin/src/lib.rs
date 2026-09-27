@@ -1,1 +1,1 @@
-//! Administrative API handlers (cluster status, node list, drain/remove, healing/rebalance status) mounted by server on a separate port from the public S3 API. See docs/architecture.md section 24 (auth) and the prompt's section 69.
+//! Administrative API handlers (cluster status, node list, drain/remove, healing/rebalance status) mounted by server on a separate port from the public LS3 API. See docs/architecture.md section 24 (auth) and the prompt's section 69.

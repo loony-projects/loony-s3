@@ -1,4 +1,4 @@
-// Parses the S3 XML responses crates/api/src/xml.rs produces. Uses the browser's
+// Parses the LS3 XML responses crates/api/src/xml.rs produces. Uses the browser's
 // built-in DOMParser -- no XML library needed, same "don't add a dependency you don't
 // need" reasoning the backend used for hand-rolling its XML instead of pulling in a
 // heavier serde adapter.
@@ -22,7 +22,7 @@ export interface ListBucketResult {
   nextContinuationToken?: string;
 }
 
-export interface S3ErrorBody {
+export interface Ls3ErrorBody {
   code: string;
   message: string;
   requestId?: string;
@@ -63,7 +63,7 @@ export function parseListBucketResult(xml: string): ListBucketResult {
   return { objects, commonPrefixes, isTruncated, nextContinuationToken: token };
 }
 
-export function parseS3Error(xml: string): S3ErrorBody | null {
+export function parseLs3Error(xml: string): Ls3ErrorBody | null {
   if (!xml.includes('<Error>')) return null;
   const doc = parseXml(xml);
   const root = doc.documentElement;

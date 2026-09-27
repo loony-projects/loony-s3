@@ -1,7 +1,7 @@
 //! The internal RPC server: exposes one node's local [`ShardStore`] (PutShard/GetShard/
 //! StatShard/DeleteShard) and cluster membership operations (Health/ClusterJoin/
 //! ClusterMembers) to other nodes over HTTP (architecture.md §40). Mounted on a
-//! separate port from the public S3 API (`S3_CLUSTER_ADDR`, not `S3_BIND_ADDR`) — S3
+//! separate port from the public LS3 API (`LS3_CLUSTER_ADDR`, not `LS3_BIND_ADDR`) — LS3
 //! clients never see these routes, and nothing here is reachable without the shared
 //! bearer token (mTLS replaces this once cluster bootstrap exists to mint a CA, see the
 //! crate-level docs).

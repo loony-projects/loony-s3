@@ -262,7 +262,7 @@ impl MetadataStore for RedbMetadataStore {
             // `continuation_token` is our own opaque cursor: it's always exactly the
             // row key of the first not-yet-returned item, so resuming from it means
             // ranging from it inclusively with no further skipping. `start_after` is a
-            // client-supplied literal key with AWS's exclusive-lower-bound semantics,
+            // client-supplied literal key with the upstream protocol's exclusive-lower-bound semantics,
             // so it ranges from the same point but the boundary row itself is skipped.
             let start_after_boundary = query
                 .start_after

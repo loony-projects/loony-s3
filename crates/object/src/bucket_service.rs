@@ -3,10 +3,10 @@ use std::sync::Arc;
 use loony_core::{Bucket, BucketName, OwnerId};
 use loony_metadata::{CreateBucket, MetaError, MetadataStore};
 
-use crate::error::S3Error;
+use crate::error::Ls3Error;
 
 /// The Bucket Service (architecture.md §1/§5): CreateBucket/DeleteBucket/HeadBucket/
-/// ListBuckets, translating [`MetaError`] into the S3-shaped [`S3Error`] the API layer
+/// ListBuckets, translating [`MetaError`] into the LS3-shaped [`Ls3Error`] the API layer
 /// expects, and enforcing ownership-based authorization (architecture.md §55: initial
 /// release is ownership/root-style — a request may only act on a bucket it owns).
 /// Contains no HTTP concerns — `loony-api`'s handlers are the only thing that knows this
@@ -25,7 +25,7 @@ impl BucketService {
         name: BucketName,
         owner_id: OwnerId,
         region: String,
-    ) -> Result<Bucket, S3Error> {
+    ) -> Result<Bucket, Ls3Error> {
         match self
             .metadata
             .create_bucket(CreateBucket {
@@ -35,7 +35,7 @@ impl BucketService {
             })
             .await
         {
-            Err(MetaError::BucketAlreadyExists(_)) => Err(S3Error::BucketAlreadyExists),
+            Err(MetaError::BucketAlreadyExists(_)) => Err(Ls3Error::BucketAlreadyExists),
             other => Ok(other?),
         }
     }
@@ -46,14 +46,14 @@ impl BucketService {
         &self,
         name: &BucketName,
         requesting_owner: OwnerId,
-    ) -> Result<Bucket, S3Error> {
+    ) -> Result<Bucket, Ls3Error> {
         let bucket = self
             .metadata
             .get_bucket(name)
             .await?
-            .ok_or(S3Error::NoSuchBucket)?;
+            .ok_or(Ls3Error::NoSuchBucket)?;
         if bucket.owner_id != requesting_owner {
-            return Err(S3Error::AccessDenied);
+            return Err(Ls3Error::AccessDenied);
         }
         Ok(bucket)
     }
@@ -62,11 +62,11 @@ impl BucketService {
         &self,
         name: &BucketName,
         requesting_owner: OwnerId,
-    ) -> Result<(), S3Error> {
+    ) -> Result<(), Ls3Error> {
         self.head_bucket(name, requesting_owner).await?;
         match self.metadata.delete_bucket(name).await {
-            Err(MetaError::NoSuchBucket(_)) => Err(S3Error::NoSuchBucket),
-            Err(MetaError::BucketNotEmpty(_)) => Err(S3Error::BucketNotEmpty),
+            Err(MetaError::NoSuchBucket(_)) => Err(Ls3Error::NoSuchBucket),
+            Err(MetaError::BucketNotEmpty(_)) => Err(Ls3Error::BucketNotEmpty),
             other => Ok(other?),
         }
     }
@@ -74,7 +74,7 @@ impl BucketService {
     /// Unlike the others, this one has no bucket to check ownership against — the
     /// owner filter *is* the authorization (a caller only ever sees their own
     /// buckets).
-    pub async fn list_buckets(&self, owner: OwnerId) -> Result<Vec<Bucket>, S3Error> {
+    pub async fn list_buckets(&self, owner: OwnerId) -> Result<Vec<Bucket>, Ls3Error> {
         Ok(self.metadata.list_buckets(owner).await?)
     }
 }
@@ -110,7 +110,7 @@ mod tests {
 
         service.delete_bucket(&name, owner).await.unwrap();
         let err = service.head_bucket(&name, owner).await.unwrap_err();
-        assert!(matches!(err, S3Error::NoSuchBucket));
+        assert!(matches!(err, Ls3Error::NoSuchBucket));
     }
 
     #[tokio::test]
@@ -125,7 +125,7 @@ mod tests {
             .create_bucket(name, OwnerId::new(), "us-east-1".into())
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::BucketAlreadyExists));
+        assert!(matches!(err, Ls3Error::BucketAlreadyExists));
     }
 
     #[tokio::test]
@@ -140,10 +140,10 @@ mod tests {
             .unwrap();
 
         let err = service.head_bucket(&name, other).await.unwrap_err();
-        assert!(matches!(err, S3Error::AccessDenied));
+        assert!(matches!(err, Ls3Error::AccessDenied));
 
         let err = service.delete_bucket(&name, other).await.unwrap_err();
-        assert!(matches!(err, S3Error::AccessDenied));
+        assert!(matches!(err, Ls3Error::AccessDenied));
 
         // The bucket is still there -- the denied delete had no effect.
         service.head_bucket(&name, owner).await.unwrap();

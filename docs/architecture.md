@@ -13,7 +13,7 @@ server). It does not reuse that code; it reuses nothing but the lessons learned 
 ## 1. System architecture
 
 ```
-                          S3 Clients (SigV4)
+                         LS3 Clients (SigV4)
                                  │
                         ┌────────────────┐
                         │   api        │  thin HTTP layer, no business logic
@@ -80,7 +80,7 @@ implementation family each:
 This avoids the two most common failure modes of "bolted-on" distribution:
 1. A second metadata implementation (e.g. plain SQLite) that has to be kept
    semantically compatible with Raft by hand.
-2. S3 handlers branching on `if cluster_mode { .. } else { .. }`.
+2. LS3 handlers branching on `if cluster_mode { .. } else { .. }`.
 
 Rejected alternative: SQLite for standalone + Raft for cluster (what §1 of the prompt
 suggests as *a* valid option). Rejected because it means two metadata engines, two sets
@@ -108,7 +108,7 @@ loony-cluster/
 │   ├── cluster/               ClusterMembership trait, node registry, heartbeats, bootstrap/join
 │   ├── object/                Bucket/Object/Multipart/Versioning domain services (the "Object Service")
 │   ├── auth/                  SigV4 verification, presigned URLs, credential trait
-│   ├── api/                   Axum routes, S3 XML (de)serialization, error mapping — thin
+│   ├── api/                   Axum routes, LS3 XML (de)serialization, error mapping — thin
 │   ├── healing/               scrubbing, healing, GC, rebalancing background jobs
 │   ├── admin/                 admin API handlers (lib, mounted by server)
 │   ├── admin-cli/              `admin` binary, talks to admin API
@@ -292,8 +292,8 @@ pub struct ShardLocation {
 }
 ```
 
-Never expose `ShardLocation`/`shard_id`/paths through the S3 API — `api` maps
-`ObjectManifest` to S3 XML/headers and drops everything below `PartManifest`.
+Never expose `ShardLocation`/`shard_id`/paths through the LS3 API — `api` maps
+`ObjectManifest` to LS3 XML/headers and drops everything below `PartManifest`.
 
 Multipart composition falls out for free: `CompleteMultipartUpload` builds the final
 manifest by concatenating the already-durable `PartManifest`s recorded during
@@ -492,9 +492,9 @@ that did get written become orphans, GC'd per §64.
   coordinator returns 200 to the client: the write **did** happen from the system's
   point of view (Raft quorum has it). Client sees a timeout/connection error and may
   retry; retry runs a brand new PUT that creates a new version (if versioning is on) or
-  overwrites (if not) — S3 PUT is idempotent-by-overwrite by design, so a duplicate
+  overwrites (if not) — LS3 PUT is idempotent-by-overwrite by design, so a duplicate
   successful write is harmless. This is why PUT does not need an idempotency token the
-  way, say, CompleteMultipartUpload does (§44) — S3's own PUT semantics already tolerate
+  way, say, CompleteMultipartUpload does (§44) — LS3's own PUT semantics already tolerate
   it.
 - Crash of the Raft *leader* specifically during step 8: the in-flight
   `CommitManifest` proposal is either present in the new leader's log (if it reached
@@ -557,7 +557,7 @@ never happened, client retries safely; DELETE is naturally idempotent).
   handled Create) runs the same streaming-encode-and-write pipeline as a normal PUT,
   producing a durable `PartManifest`, then a lightweight Raft command `RecordPart`
   appends it to the upload's part list. Re-uploading the same `part_number` overwrites
-  the recorded `PartManifest` (S3 semantics: parts can be re-uploaded until Complete).
+  the recorded `PartManifest` (LS3 semantics: parts can be re-uploaded until Complete).
 - `ListParts` → pure metadata read.
 - `CompleteMultipartUpload` → client supplies the ordered part-number/ETag list; the
   coordinator validates it against `RecordPart` history (§27 "InvalidPartOrder" /
@@ -584,7 +584,7 @@ wait on a Raft round-trip; only the final `CommitManifest` does.
 
 - Enabled: every PUT to the same key creates a new version; `latest` pointer updates
   atomically as part of the same `CommitManifest` command.
-- Suspended: PUT overwrites the "null" version in place (S3 semantics) rather than
+- Suspended: PUT overwrites the "null" version in place (LS3 semantics) rather than
   creating a new version_id.
 - Disabled: single version per key, always overwritten (this is also standalone mode's
   and cluster mode's default — no versioning subsystem to disable, it's the same code
@@ -760,7 +760,7 @@ logic per operation — it's the same pattern instantiated six times.
 
 ## 24. Security architecture
 
-- **S3-facing auth**: SigV4 (headers + presigned URLs) in `auth`, constant-time
+- **LS3-facing auth**: SigV4 (headers + presigned URLs) in `auth`, constant-time
   (`subtle`) signature comparison, credential secrets stored **encrypted at rest**
   (envelope-encrypted with a node-local/KMS-provided key) rather than hashed — SigV4
   requires deriving an HMAC signing key from the actual secret server-side, so a
@@ -792,12 +792,12 @@ logic per operation — it's the same pattern instantiated six times.
 Mirrors §76-79 directly, organized so each layer's tests don't need the layers above it:
 - **Unit**: `erasure` (property test: encode random data, drop up to M shards,
   reconstruct, assert equality — §79), `placement` (determinism + failure-domain
-  constraint property tests), `auth` (AWS SigV4 official test vectors), range-header
+  constraint property tests), `auth` (official SigV4 test vectors), range-header
   parser, manifest (de)serialization round-trips.
 - **Component**: `metadata` against a real (single-node) openraft+redb instance —
   state-machine transition tests, snapshot/restore round-trip.
-- **Integration**: standalone `server` process + AWS CLI / SDK against it — full
-  S3-compatibility surface (§75/§99, SHA-256 round-trip after every listed scenario).
+- **Integration**: standalone `server` process + standard clients/SDKs against it — full
+  LS3 API surface (§75/§99, SHA-256 round-trip after every listed scenario).
 - **Cluster/failure tests** (§77): a test harness spins up N `server` processes
   (or in-process tasks with an injectable `rpc` transport for faster iteration) and
   drives exactly the scenario list in §77 — kill during PUT, kill during GET, corrupt a
@@ -874,4 +874,4 @@ specifically:
 - Small-object packing (§9) — deferred per §17's explicit permission to do so.
 - IAM-policy-style authorization engine — trait exists (`Authorizer`), no implementation
   beyond ownership/root yet (§55/§100 non-goal for initial release).
-- Cross-region replication, S3 Select, Glacier — explicit non-goals (§100).
+- Cross-region replication, SQL-over-object queries, archival storage tiers — explicit non-goals (§100).

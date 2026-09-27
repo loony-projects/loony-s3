@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use loony_core::BucketName;
-use loony_object::S3Error;
+use loony_object::Ls3Error;
 
 use super::request_id;
 use crate::auth::AuthenticatedOwner;
@@ -15,7 +15,7 @@ use crate::xml;
 fn parse_bucket_name(raw: &str, rid: &str) -> Result<BucketName, ApiError> {
     BucketName::parse(raw).map_err(|e| {
         ApiError::new(
-            S3Error::InvalidBucketName(e.reason.to_string()),
+            Ls3Error::InvalidBucketName(e.reason.to_string()),
             rid.to_string(),
             Some(format!("/{raw}")),
         )

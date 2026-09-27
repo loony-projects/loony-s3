@@ -1,7 +1,7 @@
 //! The `MetadataStore` trait (architecture.md §4/§37). The authoritative, transactional
 //! source of truth for buckets, objects/manifests, and multipart uploads. `cluster`
 //! and node/credential-registry methods are added in later phases as those subsystems
-//! land; this phase covers what Phase 3 (Standalone S3) needs.
+//! land; this phase covers what Phase 3 (Standalone LS3) needs.
 
 use async_trait::async_trait;
 use loony_core::{

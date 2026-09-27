@@ -62,7 +62,7 @@ async fn main() -> std::process::ExitCode {
         tracing::error!(
             expected = %expected,
             actual = %identity.node_id,
-            "--node-id / S3_NODE_ID does not match this data directory's persisted NODE_ID"
+            "--node-id / LS3_NODE_ID does not match this data directory's persisted NODE_ID"
         );
         return std::process::ExitCode::FAILURE;
     }
@@ -107,7 +107,7 @@ async fn main() -> std::process::ExitCode {
         let (token, is_dev_default) = resolve_cluster_token(c.cluster_id.as_deref());
         if is_dev_default {
             tracing::warn!(
-                "no S3_CLUSTER_TOKEN set -- using a token derived from the cluster id. Fine \
+                "no LS3_CLUSTER_TOKEN set -- using a token derived from the cluster id. Fine \
                  for local development, not for anything else (see docs/architecture.md §41)."
             );
         }
@@ -214,12 +214,12 @@ async fn main() -> std::process::ExitCode {
     let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
         Ok(listener) => listener,
         Err(err) => {
-            tracing::error!(%err, addr = %config.bind_addr, "failed to bind S3 API address");
+            tracing::error!(%err, addr = %config.bind_addr, "failed to bind LS3 API address");
             return std::process::ExitCode::FAILURE;
         }
     };
-    tracing::info!(addr = %config.bind_addr, "S3 API listening");
-    eprintln!("server: S3 API listening on http://{}", config.bind_addr);
+    tracing::info!(addr = %config.bind_addr, "LS3 API listening");
+    eprintln!("server: LS3 API listening on http://{}", config.bind_addr);
 
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -405,13 +405,13 @@ async fn start_cluster_mode(
 }
 
 /// Dev-mode cluster token derivation (architecture.md §41's "simpler credentials"
-/// allowance, same pattern as `derive_dev_credential` below): `S3_CLUSTER_TOKEN` is the
+/// allowance, same pattern as `derive_dev_credential` below): `LS3_CLUSTER_TOKEN` is the
 /// real production path; without it, every node derives the same token from the
 /// cluster id, which every node must be told anyway (bootstrap always sets it; join
-/// accepts `--cluster-id`/`S3_CLUSTER_ID` for exactly this purpose, separate from the
+/// accepts `--cluster-id`/`LS3_CLUSTER_ID` for exactly this purpose, separate from the
 /// cluster-id *validation* that happens after a successful join).
 fn resolve_cluster_token(cluster_id_hint: Option<&str>) -> (String, bool) {
-    if let Ok(token) = std::env::var("S3_CLUSTER_TOKEN") {
+    if let Ok(token) = std::env::var("LS3_CLUSTER_TOKEN") {
         return (token, false);
     }
     let seed = cluster_id_hint.unwrap_or("unspecified-cluster");
@@ -424,7 +424,7 @@ fn resolve_cluster_token(cluster_id_hint: Option<&str>) -> (String, bool) {
 }
 
 /// Ensures a usable SigV4 credential exists before the server starts accepting
-/// requests. Prefers `S3_ROOT_ACCESS_KEY`/`S3_ROOT_SECRET_KEY` from the environment
+/// requests. Prefers `LS3_ROOT_ACCESS_KEY`/`LS3_ROOT_SECRET_KEY` from the environment
 /// (the real production path); when neither is set, falls back to a credential
 /// deterministically derived from this node's persistent `NodeId` — stable across
 /// restarts (so a dev server you keep restarting doesn't invalidate itself), but
@@ -436,8 +436,8 @@ async fn seed_root_credential(
     node_id: NodeId,
 ) -> Result<(), loony_metadata::MetaError> {
     let env_creds = (
-        std::env::var("S3_ROOT_ACCESS_KEY").ok(),
-        std::env::var("S3_ROOT_SECRET_KEY").ok(),
+        std::env::var("LS3_ROOT_ACCESS_KEY").ok(),
+        std::env::var("LS3_ROOT_SECRET_KEY").ok(),
     );
     let (access_key, secret_key, is_dev_default) = match env_creds {
         (Some(access_key), Some(secret_key)) => (access_key, secret_key, false),
@@ -467,12 +467,12 @@ async fn seed_root_credential(
     if is_dev_default {
         tracing::warn!(
             access_key = %access_key,
-            "no S3_ROOT_ACCESS_KEY/S3_ROOT_SECRET_KEY set -- using a credential derived from this \
+            "no LS3_ROOT_ACCESS_KEY/LS3_ROOT_SECRET_KEY set -- using a credential derived from this \
              node's identity. Fine for local development, not for anything else."
         );
         eprintln!(
-            "server: using a dev-default root credential (set S3_ROOT_ACCESS_KEY / \
-             S3_ROOT_SECRET_KEY for anything beyond local testing):\n  \
+            "server: using a dev-default root credential (set LS3_ROOT_ACCESS_KEY / \
+             LS3_ROOT_SECRET_KEY for anything beyond local testing):\n  \
              access key: {access_key}\n  secret key: {secret_key}"
         );
     } else {

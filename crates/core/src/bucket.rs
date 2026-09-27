@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 
 use crate::ids::{BucketId, OwnerId};
 
-/// A validated S3-style bucket name. Validation happens once, at construction, so every
+/// A validated LS3-style bucket name. Validation happens once, at construction, so every
 /// other part of the system can treat a `BucketName` as already-safe.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]

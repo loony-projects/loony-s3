@@ -33,12 +33,12 @@ echo "building loony-server..."
 (cd "$REPO_ROOT" && cargo build --bin loony-server 2>&1 | tail -5)
 
 echo "starting loony-server (standalone) on http://$BIND_ADDR, data dir $DATA_DIR"
-S3_MODE=standalone \
-S3_DATA_DIR="$DATA_DIR" \
-S3_BIND_ADDR="$BIND_ADDR" \
-S3_REGION="$REGION" \
-S3_ROOT_ACCESS_KEY="$ACCESS_KEY" \
-S3_ROOT_SECRET_KEY="$SECRET_KEY" \
+LS3_MODE=standalone \
+LS3_DATA_DIR="$DATA_DIR" \
+LS3_BIND_ADDR="$BIND_ADDR" \
+LS3_REGION="$REGION" \
+LS3_ROOT_ACCESS_KEY="$ACCESS_KEY" \
+LS3_ROOT_SECRET_KEY="$SECRET_KEY" \
 nohup "$BIN" --mode standalone >"$LOG_FILE" 2>&1 &
 echo $! >"$PID_FILE"
 
@@ -57,6 +57,14 @@ export ENDPOINT="http://$BIND_ADDR"
 export REGION="$REGION"
 export ACCESS_KEY="$ACCESS_KEY"
 export SECRET_KEY="$SECRET_KEY"
+# rclone remote "loony:" -- configured entirely from env, no rclone.conf needed.
+export RCLONE_CONFIG_LOONY_TYPE=s3
+export RCLONE_CONFIG_LOONY_PROVIDER=Other
+export RCLONE_CONFIG_LOONY_LIST_VERSION=2
+export RCLONE_CONFIG_LOONY_ENDPOINT="http://$BIND_ADDR"
+export RCLONE_CONFIG_LOONY_REGION="$REGION"
+export RCLONE_CONFIG_LOONY_ACCESS_KEY_ID="$ACCESS_KEY"
+export RCLONE_CONFIG_LOONY_SECRET_ACCESS_KEY="$SECRET_KEY"
 EOF
 
 echo "started (pid $(cat "$PID_FILE"))"
@@ -65,5 +73,5 @@ echo "  access key:  $ACCESS_KEY"
 echo "  secret key:  $SECRET_KEY"
 echo "  log:         $LOG_FILE"
 echo
-echo "AWS CLI:   aws --endpoint-url http://$BIND_ADDR s3 ls"
 echo "curl demo: source $ENV_FILE && scripts/curl-demo.sh"
+echo "rclone:    source $ENV_FILE && rclone lsd loony:"

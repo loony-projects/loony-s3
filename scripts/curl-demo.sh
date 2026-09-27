@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Drives loony-server's S3 API with plain curl -- no AWS CLI, no SDK. Every request
-# needs a SigV4 signature, so this script implements that signing (AWS4-HMAC-SHA256,
-# header-based auth) itself in bash + openssl, then walks through a full
+# Drives loony-server's LS3 API with plain curl -- no CLI, no SDK. Every request
+# needs a SigV4 signature, so this script implements that signing (header-based auth)
+# itself in bash + openssl, then walks through a full
 # create-bucket -> put -> head -> get -> list -> delete -> delete-bucket sequence.
 #
 # Requires: bash, curl, openssl. ASCII bucket/key names only (the URI-encoding here
@@ -21,6 +21,14 @@ ACCESS_KEY="${ACCESS_KEY:-devkey}"
 SECRET_KEY="${SECRET_KEY:-devsecret1234}"
 BUCKET="${BUCKET:-curl-demo-bucket}"
 OBJECT_KEY="${OBJECT_KEY:-hello.txt}"
+
+# Wire-protocol literals fixed by the SigV4 spec -- every standard client signs with
+# these exact bytes, so they can't be renamed without breaking compatibility. This is
+# the only place they're spelled out (mirrors crates/auth/src/canonical.rs).
+readonly SIGNING_ALGORITHM="AWS4-HMAC-SHA256"
+readonly SIGNING_KEY_PREFIX="AWS4"
+readonly SCOPE_TERMINATOR="aws4_request"
+readonly SERVICE="s3"
 
 HOST="${ENDPOINT#http://}"
 HOST="${HOST#https://}"
@@ -84,7 +92,7 @@ canonical_query_string() {
 # it. $1 method, $2 path (already the canonical, slash-preserving path this server
 # expects, e.g. "/bucket/key"), $3 raw query string (no leading '?', may be empty),
 # $4 body file (may be empty for no body). Extra curl args follow as $5+.
-s3_request() {
+ls3_request() {
   local method="$1" path="$2" query="$3" body_file="${4:-}"
   shift 4 || shift $#
   local extra_curl_args=("$@")
@@ -118,20 +126,20 @@ s3_request() {
   local hashed_canonical_request
   hashed_canonical_request="$(printf '%s' "$canonical_request" | sha256_hex)"
 
-  local credential_scope="$date_stamp/$REGION/s3/aws4_request"
+  local credential_scope="$date_stamp/$REGION/$SERVICE/$SCOPE_TERMINATOR"
   local string_to_sign
-  printf -v string_to_sign 'AWS4-HMAC-SHA256\n%s\n%s\n%s' \
-    "$amz_date" "$credential_scope" "$hashed_canonical_request"
+  printf -v string_to_sign '%s\n%s\n%s\n%s' \
+    "$SIGNING_ALGORITHM" "$amz_date" "$credential_scope" "$hashed_canonical_request"
 
   local k_secret_hex k_date k_region k_service k_signing signature
-  k_secret_hex="$(str_to_hex "AWS4$SECRET_KEY")"
+  k_secret_hex="$(str_to_hex "$SIGNING_KEY_PREFIX$SECRET_KEY")"
   k_date="$(printf '%s' "$date_stamp" | hmac_sha256_hex "$k_secret_hex")"
   k_region="$(printf '%s' "$REGION" | hmac_sha256_hex "$k_date")"
-  k_service="$(printf '%s' "s3" | hmac_sha256_hex "$k_region")"
-  k_signing="$(printf '%s' "aws4_request" | hmac_sha256_hex "$k_service")"
+  k_service="$(printf '%s' "$SERVICE" | hmac_sha256_hex "$k_region")"
+  k_signing="$(printf '%s' "$SCOPE_TERMINATOR" | hmac_sha256_hex "$k_service")"
   signature="$(printf '%s' "$string_to_sign" | hmac_sha256_hex "$k_signing")"
 
-  local authorization="AWS4-HMAC-SHA256 Credential=$ACCESS_KEY/$credential_scope, SignedHeaders=$signed_headers, Signature=$signature"
+  local authorization="$SIGNING_ALGORITHM Credential=$ACCESS_KEY/$credential_scope, SignedHeaders=$signed_headers, Signature=$signature"
 
   local url="$ENDPOINT$path"
   [[ -n "$query" ]] && url="$url?$query"
@@ -170,23 +178,23 @@ echo "endpoint: $ENDPOINT   region: $REGION   access key: $ACCESS_KEY"
 echo
 
 echo "== CreateBucket =="
-s3_request PUT "/$BUCKET" ""
+ls3_request PUT "/$BUCKET" ""
 
 echo "== HeadBucket =="
-s3_request HEAD "/$BUCKET" ""
+ls3_request HEAD "/$BUCKET" ""
 
 echo "== PutObject =="
 body_file="$(mktemp)"
 trap 'rm -f "$body_file" "$downloaded_file"' EXIT
 printf 'hello from curl-demo.sh, %s\n' "$(date -u)" >"$body_file"
-s3_request PUT "/$BUCKET/$OBJECT_KEY" "" "$body_file" -H "Content-Type: text/plain"
+ls3_request PUT "/$BUCKET/$OBJECT_KEY" "" "$body_file" -H "Content-Type: text/plain"
 
 echo "== HeadObject =="
-s3_request HEAD "/$BUCKET/$OBJECT_KEY" ""
+ls3_request HEAD "/$BUCKET/$OBJECT_KEY" ""
 
 echo "== GetObject =="
 downloaded_file="$(mktemp)"
-s3_request GET "/$BUCKET/$OBJECT_KEY" "" "" -o "$downloaded_file"
+ls3_request GET "/$BUCKET/$OBJECT_KEY" "" "" -o "$downloaded_file"
 if diff -q "$body_file" "$downloaded_file" >/dev/null; then
   echo "  downloaded body matches what was uploaded"
 else
@@ -195,12 +203,12 @@ fi
 echo
 
 echo "== ListObjectsV2 =="
-s3_request GET "/$BUCKET" "list-type=2"
+ls3_request GET "/$BUCKET" "list-type=2"
 
 echo "== DeleteObject =="
-s3_request DELETE "/$BUCKET/$OBJECT_KEY" ""
+ls3_request DELETE "/$BUCKET/$OBJECT_KEY" ""
 
 echo "== DeleteBucket =="
-s3_request DELETE "/$BUCKET" ""
+ls3_request DELETE "/$BUCKET" ""
 
 echo "done"

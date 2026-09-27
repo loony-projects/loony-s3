@@ -74,10 +74,10 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
 
   if [[ "$i" -eq 1 ]]; then
     echo "starting node 1 (bootstrap) -- api $bind_addr, cluster $cluster_addr"
-    S3_MODE=cluster S3_CLUSTER_TOKEN="$CLUSTER_TOKEN" S3_CLUSTER_ID="$CLUSTER_ID" \
-      S3_DATA_DIR="$data_dir" S3_BIND_ADDR="$bind_addr" S3_REGION="$REGION" \
-      S3_CLUSTER_ADDR="$cluster_addr" S3_ADVERTISE_ADDR="$cluster_addr" \
-      S3_ROOT_ACCESS_KEY="$ACCESS_KEY" S3_ROOT_SECRET_KEY="$SECRET_KEY" \
+    LS3_MODE=cluster LS3_CLUSTER_TOKEN="$CLUSTER_TOKEN" LS3_CLUSTER_ID="$CLUSTER_ID" \
+      LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_REGION="$REGION" \
+      LS3_CLUSTER_ADDR="$cluster_addr" LS3_ADVERTISE_ADDR="$cluster_addr" \
+      LS3_ROOT_ACCESS_KEY="$ACCESS_KEY" LS3_ROOT_SECRET_KEY="$SECRET_KEY" \
       nohup "$BIN" --mode cluster --bootstrap >"$log_file" 2>&1 &
     echo $! >"$pid_file"
 
@@ -88,9 +88,9 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
   else
     seed="${CLUSTER_ADDRS[1]}"
     echo "starting node $i (join via $seed) -- api $bind_addr, cluster $cluster_addr"
-    S3_MODE=cluster S3_CLUSTER_TOKEN="$CLUSTER_TOKEN" \
-      S3_DATA_DIR="$data_dir" S3_BIND_ADDR="$bind_addr" S3_REGION="$REGION" \
-      S3_CLUSTER_ADDR="$cluster_addr" S3_ADVERTISE_ADDR="$cluster_addr" \
+    LS3_MODE=cluster LS3_CLUSTER_TOKEN="$CLUSTER_TOKEN" \
+      LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_REGION="$REGION" \
+      LS3_CLUSTER_ADDR="$cluster_addr" LS3_ADVERTISE_ADDR="$cluster_addr" \
       nohup "$BIN" --mode cluster --join "$seed" >"$log_file" 2>&1 &
     echo $! >"$pid_file"
 
@@ -112,6 +112,14 @@ export ENDPOINT="http://${BIND_ADDRS[1]}"
 export REGION="$REGION"
 export ACCESS_KEY="$ACCESS_KEY"
 export SECRET_KEY="$SECRET_KEY"
+# rclone remote "loony:" (node 1) -- configured entirely from env, no rclone.conf needed.
+export RCLONE_CONFIG_LOONY_TYPE=s3
+export RCLONE_CONFIG_LOONY_PROVIDER=Other
+export RCLONE_CONFIG_LOONY_LIST_VERSION=2
+export RCLONE_CONFIG_LOONY_ENDPOINT="http://${BIND_ADDRS[1]}"
+export RCLONE_CONFIG_LOONY_REGION="$REGION"
+export RCLONE_CONFIG_LOONY_ACCESS_KEY_ID="$ACCESS_KEY"
+export RCLONE_CONFIG_LOONY_SECRET_ACCESS_KEY="$SECRET_KEY"
 EOF
 
 echo
@@ -123,5 +131,5 @@ echo
 echo "Only node 1 (the bootstrap node) is the metadata leader today -- writes must go"
 echo "through it; reads and already-placed shard fetches work against any node."
 echo
-echo "AWS CLI:   aws --endpoint-url http://${BIND_ADDRS[1]} s3 ls"
 echo "curl demo: source $ENV_FILE && scripts/curl-demo.sh"
+echo "rclone:    source $ENV_FILE && rclone lsd loony:"

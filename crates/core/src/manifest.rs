@@ -1,6 +1,6 @@
 //! Object manifest (architecture.md §6): the authoritative description of an object's
 //! physical representation. Never expose `ShardLocation`/physical identifiers through
-//! the S3 API — only `object`/`api` see this far down.
+//! the LS3 API — only `object`/`api` see this far down.
 
 use std::collections::BTreeMap;
 

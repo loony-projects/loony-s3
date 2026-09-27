@@ -19,7 +19,7 @@ use loony_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
 use sha2::Sha256;
 use time::OffsetDateTime;
 
-use crate::error::S3Error;
+use crate::error::Ls3Error;
 use crate::stripe_reader::StripeReader;
 
 /// Objects smaller than this get `DurabilityPolicy::Replicated` instead of erasure
@@ -90,14 +90,14 @@ impl ObjectService {
         &self,
         bucket: &BucketName,
         requesting_owner: OwnerId,
-    ) -> Result<Bucket, S3Error> {
+    ) -> Result<Bucket, Ls3Error> {
         let bucket = self
             .metadata
             .get_bucket(bucket)
             .await?
-            .ok_or(S3Error::NoSuchBucket)?;
+            .ok_or(Ls3Error::NoSuchBucket)?;
         if bucket.owner_id != requesting_owner {
-            return Err(S3Error::AccessDenied);
+            return Err(Ls3Error::AccessDenied);
         }
         Ok(bucket)
     }
@@ -150,7 +150,7 @@ impl ObjectService {
         version_id: VersionId,
         stripe_index: u32,
         shard_bytes: Vec<Vec<u8>>,
-    ) -> Result<Vec<ShardLocation>, S3Error> {
+    ) -> Result<Vec<ShardLocation>, Ls3Error> {
         let candidates = self.placement_candidates().await;
         let plan = loony_placement::plan_write(
             object_id,
@@ -159,7 +159,7 @@ impl ObjectService {
             shard_bytes.len(),
             &candidates,
         )
-        .map_err(|e| S3Error::InvalidArgument(e.to_string()))?;
+        .map_err(|e| Ls3Error::InvalidArgument(e.to_string()))?;
 
         let writes = shard_bytes.into_iter().zip(plan).map(|(bytes, placed)| {
             let target = ShardTarget {
@@ -190,7 +190,7 @@ impl ObjectService {
         user_metadata: BTreeMap<String, String>,
         body: ShardBytesIn,
         requesting_owner: OwnerId,
-    ) -> Result<ObjectManifest, S3Error> {
+    ) -> Result<ObjectManifest, Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
 
         // Minted once, here, on the coordinator -- never inside a replicated apply()
@@ -243,7 +243,7 @@ impl ObjectService {
         version_id: VersionId,
         candidate_count: usize,
         mut body: ShardBytesIn,
-    ) -> Result<(Vec<Stripe>, u64, [u8; 32], [u8; 16]), S3Error> {
+    ) -> Result<(Vec<Stripe>, u64, [u8; 32], [u8; 16]), Ls3Error> {
         // Peek up to the small-object threshold to decide durability policy without
         // buffering the whole object (architecture.md §9/§81).
         let mut head = Vec::new();
@@ -308,7 +308,7 @@ impl ObjectService {
                 let stripe_len = stripe_data.len() as u64;
 
                 let encoded = codec.encode(&stripe_data).map_err(|e| {
-                    S3Error::InvalidArgument(format!("erasure encoding failed: {e}"))
+                    Ls3Error::InvalidArgument(format!("erasure encoding failed: {e}"))
                 })?;
                 let shards = self
                     .write_stripe_shards(object_id, version_id, stripe_index, encoded.shards)
@@ -330,7 +330,7 @@ impl ObjectService {
             if stripes.is_empty() {
                 // A zero-byte object still needs exactly one (empty) stripe.
                 let encoded = codec.encode(&[]).map_err(|e| {
-                    S3Error::InvalidArgument(format!("erasure encoding failed: {e}"))
+                    Ls3Error::InvalidArgument(format!("erasure encoding failed: {e}"))
                 })?;
                 let shards = self
                     .write_stripe_shards(object_id, version_id, 0, encoded.shards)
@@ -366,7 +366,7 @@ impl ObjectService {
         content_type: String,
         user_metadata: BTreeMap<String, String>,
         requesting_owner: OwnerId,
-    ) -> Result<UploadId, S3Error> {
+    ) -> Result<UploadId, Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
         Ok(self
             .metadata
@@ -389,15 +389,15 @@ impl ObjectService {
         key: &ObjectKey,
         upload_id: UploadId,
         requesting_owner: OwnerId,
-    ) -> Result<loony_metadata::MultipartUploadState, S3Error> {
+    ) -> Result<loony_metadata::MultipartUploadState, Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
         let state = self
             .metadata
             .get_upload(upload_id)
             .await?
-            .ok_or(S3Error::NoSuchUpload)?;
+            .ok_or(Ls3Error::NoSuchUpload)?;
         if state.bucket_id != bucket.bucket_id || &state.key != key {
-            return Err(S3Error::NoSuchUpload);
+            return Err(Ls3Error::NoSuchUpload);
         }
         Ok(state)
     }
@@ -405,7 +405,7 @@ impl ObjectService {
     /// Uploads one part (architecture.md §15): the same durable, placed
     /// encode-and-write pipeline as a whole-object PUT, recorded against `upload_id` via
     /// `RecordPart` once written. Re-uploading the same `part_number` before Complete
-    /// overwrites what was recorded, matching S3 semantics.
+    /// overwrites what was recorded, matching LS3 semantics.
     pub async fn upload_part(
         &self,
         bucket: &BucketName,
@@ -414,11 +414,11 @@ impl ObjectService {
         part_number: u32,
         body: ShardBytesIn,
         requesting_owner: OwnerId,
-    ) -> Result<ETag, S3Error> {
+    ) -> Result<ETag, Ls3Error> {
         self.authorized_upload(bucket, key, upload_id, requesting_owner)
             .await?;
         if !(1..=10_000).contains(&part_number) {
-            return Err(S3Error::InvalidArgument(
+            return Err(Ls3Error::InvalidArgument(
                 "part number must be between 1 and 10000".into(),
             ));
         }
@@ -464,7 +464,7 @@ impl ObjectService {
         key: &ObjectKey,
         upload_id: UploadId,
         requesting_owner: OwnerId,
-    ) -> Result<Vec<PartSummary>, S3Error> {
+    ) -> Result<Vec<PartSummary>, Ls3Error> {
         self.authorized_upload(bucket, key, upload_id, requesting_owner)
             .await?;
         self.metadata
@@ -487,7 +487,7 @@ impl ObjectService {
         upload_id: UploadId,
         requested_parts: Vec<(u32, String)>,
         requesting_owner: OwnerId,
-    ) -> Result<ObjectManifest, S3Error> {
+    ) -> Result<ObjectManifest, Ls3Error> {
         let state = self
             .authorized_upload(bucket, key, upload_id, requesting_owner)
             .await?;
@@ -511,7 +511,7 @@ impl ObjectService {
         key: &ObjectKey,
         upload_id: UploadId,
         requesting_owner: OwnerId,
-    ) -> Result<(), S3Error> {
+    ) -> Result<(), Ls3Error> {
         self.authorized_upload(bucket, key, upload_id, requesting_owner)
             .await?;
         self.metadata
@@ -525,7 +525,7 @@ impl ObjectService {
         bucket: &BucketName,
         key: &ObjectKey,
         requesting_owner: OwnerId,
-    ) -> Result<(ObjectManifest, ShardBytesOut), S3Error> {
+    ) -> Result<(ObjectManifest, ShardBytesOut), Ls3Error> {
         let manifest = self.head_object(bucket, key, requesting_owner).await?;
         let stripes: Vec<Stripe> = manifest
             .parts
@@ -554,12 +554,12 @@ impl ObjectService {
         bucket: &BucketName,
         key: &ObjectKey,
         requesting_owner: OwnerId,
-    ) -> Result<ObjectManifest, S3Error> {
+    ) -> Result<ObjectManifest, Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
         self.metadata
             .get_manifest(bucket.bucket_id, key)
             .await?
-            .ok_or(S3Error::NoSuchKey)
+            .ok_or(Ls3Error::NoSuchKey)
     }
 
     pub async fn delete_object(
@@ -567,7 +567,7 @@ impl ObjectService {
         bucket: &BucketName,
         key: &ObjectKey,
         requesting_owner: OwnerId,
-    ) -> Result<(), S3Error> {
+    ) -> Result<(), Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
         // Logical delete only (architecture.md §25/§104): shards this object
         // referenced are not touched here. They become orphan-GC candidates once a
@@ -584,7 +584,7 @@ impl ObjectService {
         bucket: &BucketName,
         params: ListObjectsParams,
         requesting_owner: OwnerId,
-    ) -> Result<ListObjectsPage, S3Error> {
+    ) -> Result<ListObjectsPage, Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
         Ok(self
             .metadata
@@ -601,16 +601,16 @@ impl ObjectService {
 }
 
 /// Translates the multipart-specific [`MetaError`] variants (prompt §57's `NoSuchUpload`/
-/// `InvalidPart`/`InvalidPartOrder`) into their dedicated [`S3Error`] counterparts so
+/// `InvalidPart`/`InvalidPartOrder`) into their dedicated [`Ls3Error`] counterparts so
 /// `loony-api` maps them to the right HTTP status/code instead of a generic 500 — every
-/// other variant still falls through to the blanket `S3Error::Meta` conversion. Needed
+/// other variant still falls through to the blanket `Ls3Error::Meta` conversion. Needed
 /// at each multipart metadata-store call past `authorized_upload`'s own check, since the
 /// upload can still be concurrently aborted/completed by another request in between.
-fn map_multipart_meta_err(err: MetaError) -> S3Error {
+fn map_multipart_meta_err(err: MetaError) -> Ls3Error {
     match err {
-        MetaError::NoSuchUpload(_) => S3Error::NoSuchUpload,
-        MetaError::InvalidPart => S3Error::InvalidPart,
-        MetaError::InvalidPartOrder => S3Error::InvalidPartOrder,
+        MetaError::NoSuchUpload(_) => Ls3Error::NoSuchUpload,
+        MetaError::InvalidPart => Ls3Error::InvalidPart,
+        MetaError::InvalidPartOrder => Ls3Error::InvalidPartOrder,
         other => other.into(),
     }
 }
@@ -784,7 +784,7 @@ mod tests {
 
         service.delete_object(&bucket, &key, owner).await.unwrap();
         let err = service.head_object(&bucket, &key, owner).await.unwrap_err();
-        assert!(matches!(err, S3Error::NoSuchKey));
+        assert!(matches!(err, Ls3Error::NoSuchKey));
     }
 
     #[tokio::test]
@@ -886,7 +886,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::NoSuchBucket));
+        assert!(matches!(err, Ls3Error::NoSuchBucket));
     }
 
     #[tokio::test]
@@ -918,20 +918,20 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::AccessDenied));
+        assert!(matches!(err, Ls3Error::AccessDenied));
 
         let err = service
             .get_object(&bucket, &key, other)
             .await
             .map(|_| ())
             .unwrap_err();
-        assert!(matches!(err, S3Error::AccessDenied));
+        assert!(matches!(err, Ls3Error::AccessDenied));
 
         let err = service
             .delete_object(&bucket, &key, other)
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::AccessDenied));
+        assert!(matches!(err, Ls3Error::AccessDenied));
 
         service.head_object(&bucket, &key, owner).await.unwrap();
     }
@@ -1056,7 +1056,7 @@ mod tests {
             .list_parts(&bucket, &key, upload_id, owner)
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::NoSuchUpload));
+        assert!(matches!(err, Ls3Error::NoSuchUpload));
     }
 
     #[tokio::test]
@@ -1088,7 +1088,7 @@ mod tests {
             .list_parts(&bucket, &key, upload_id, owner)
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::NoSuchUpload));
+        assert!(matches!(err, Ls3Error::NoSuchUpload));
     }
 
     #[tokio::test]
@@ -1125,7 +1125,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::InvalidPart));
+        assert!(matches!(err, Ls3Error::InvalidPart));
 
         let err = service
             .complete_multipart_upload(
@@ -1140,7 +1140,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::InvalidPartOrder));
+        assert!(matches!(err, Ls3Error::InvalidPartOrder));
     }
 
     #[tokio::test]
@@ -1163,7 +1163,7 @@ mod tests {
             .upload_part(&bucket, &key, upload_id, 1, body(b"x"), other)
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::AccessDenied));
+        assert!(matches!(err, Ls3Error::AccessDenied));
     }
 
     /// Splits `data` into many small chunks the way a real streamed HTTP request body
@@ -1246,6 +1246,6 @@ mod tests {
             .list_parts(&bucket, &key, UploadId::new(), owner)
             .await
             .unwrap_err();
-        assert!(matches!(err, S3Error::NoSuchUpload));
+        assert!(matches!(err, Ls3Error::NoSuchUpload));
     }
 }

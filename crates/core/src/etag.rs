@@ -1,7 +1,7 @@
 //! ETag (architecture.md §29 / prompt §29). For a single-part object this is the hex
-//! MD5 of the object body, matching what most S3 clients/tools assume even though it's
+//! MD5 of the object body, matching what most standard clients/tools assume even though it's
 //! not part of the spec; a multipart object's ETag is `hex(MD5(concat(part MD5s)))-N`
-//! per AWS's own (documented, non-cryptographic) convention. `object` computes the
+//! per the upstream protocol's own (documented, non-cryptographic) convention. `object` computes the
 //! actual digest; this type is just the validated wrapper other layers pass around.
 
 use std::fmt;
@@ -18,7 +18,7 @@ impl ETag {
     }
 
     /// Build a multipart ETag: `hex(MD5(concat(part digests)))-{part_count}`, the same
-    /// (non-cryptographic, documented-as-such) convention AWS S3 uses.
+    /// (non-cryptographic, documented-as-such) convention the upstream protocol uses.
     pub fn from_multipart_digests(combined_digest: [u8; 16], part_count: usize) -> Self {
         Self(format!("{}-{part_count}", hex(&combined_digest)))
     }

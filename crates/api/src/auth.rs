@@ -19,7 +19,7 @@ use crate::handlers::request_id;
 use crate::state::AppState;
 
 /// Clock skew tolerance either side of "now" (prompt §52's `x-amz-date` requirement).
-/// AWS's own SDKs default to a similar window.
+/// Standard SDKs default to a similar window.
 const MAX_CLOCK_SKEW: Duration = Duration::minutes(15);
 
 #[derive(Clone, Copy)]

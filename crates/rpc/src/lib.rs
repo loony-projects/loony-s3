@@ -1,9 +1,9 @@
 //! Internal node-to-node protocol (architecture.md §40): the [`ShardStore`]
 //! implementation that dispatches to a remote node instead of the local disk, plus the
-//! server that exposes a node's local `ShardStore` to peers. Never exposed to S3
-//! clients — this is mounted on a separate port from the public S3 API.
+//! server that exposes a node's local `ShardStore` to peers. Never exposed to LS3
+//! clients — this is mounted on a separate port from the public LS3 API.
 //!
-//! **Transport**: HTTP/1.1 via axum/hyper, the same stack the public S3 API already
+//! **Transport**: HTTP/1.1 via axum/hyper, the same stack the public LS3 API already
 //! uses — no protobuf/gRPC codegen tooling, and streaming request/response bodies come
 //! for free (essential for shard PUT/GET, which can be megabytes). HTTP/2 (and its
 //! multiplexing benefit) is a transport-layer upgrade that arrives automatically once

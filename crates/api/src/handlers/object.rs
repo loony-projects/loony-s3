@@ -8,7 +8,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 
 use loony_core::{BucketName, ObjectKey, UploadId};
-use loony_object::S3Error;
+use loony_object::Ls3Error;
 use loony_storage::ShardBytesIn;
 
 use super::request_id;
@@ -19,7 +19,7 @@ use crate::state::AppState;
 use crate::xml;
 
 /// Body-size cap for a `CompleteMultipartUpload` request: the part list is the only
-/// thing in it, and even the real S3 maximum of 10,000 parts comfortably fits in a
+/// thing in it, and even the upstream protocol's maximum of 10,000 parts comfortably fits in a
 /// fraction of this (each `<Part>` element is well under 100 bytes).
 const MAX_COMPLETE_MULTIPART_BODY: usize = 4 * 1024 * 1024;
 
@@ -31,14 +31,14 @@ fn parse_bucket_and_key(
     let resource = format!("/{bucket}/{key}");
     let bucket_name = BucketName::parse(bucket).map_err(|e| {
         ApiError::new(
-            S3Error::InvalidBucketName(e.reason.to_string()),
+            Ls3Error::InvalidBucketName(e.reason.to_string()),
             rid.to_string(),
             Some(resource.clone()),
         )
     })?;
     let object_key = ObjectKey::parse(key).map_err(|e| {
         ApiError::new(
-            S3Error::InvalidArgument(e.reason.to_string()),
+            Ls3Error::InvalidArgument(e.reason.to_string()),
             rid.to_string(),
             Some(resource),
         )
@@ -47,12 +47,12 @@ fn parse_bucket_and_key(
 }
 
 /// A malformed `uploadId` can never match a real upload, so it's treated exactly like
-/// one that doesn't exist (matching real S3's own behavior) rather than surfaced as a
+/// one that doesn't exist (matching the upstream protocol's own behavior) rather than surfaced as a
 /// separate `InvalidArgument`.
 fn parse_upload_id(raw: &str, rid: &str, resource: &str) -> Result<UploadId, ApiError> {
     raw.parse::<UploadId>().map_err(|_| {
         ApiError::new(
-            S3Error::NoSuchUpload,
+            Ls3Error::NoSuchUpload,
             rid.to_string(),
             Some(resource.to_string()),
         )
@@ -61,7 +61,7 @@ fn parse_upload_id(raw: &str, rid: &str, resource: &str) -> Result<UploadId, Api
 
 /// Collects `x-amz-meta-*` request headers into the object's user metadata
 /// (prompt §60). Header names arriving here are already lowercase (the `http` crate
-/// normalizes them), matching S3's case-insensitive-but-conventionally-lowercase
+/// normalizes them), matching LS3's case-insensitive-but-conventionally-lowercase
 /// treatment of these headers.
 fn user_metadata(headers: &HeaderMap) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
@@ -78,7 +78,7 @@ fn user_metadata(headers: &HeaderMap) -> BTreeMap<String, String> {
 /// Query parameters distinguishing a multipart operation from its plain-object
 /// counterpart on the same route (prompt §51: "plus multipart query variants") --
 /// `PUT`/`GET`/`DELETE`/`POST` on `/{bucket}/{key}` are shared between whole-object and
-/// multipart operations in the real S3 API too, disambiguated the same way here.
+/// multipart operations in the upstream protocol too, disambiguated the same way here.
 #[derive(Debug, Deserialize, Default)]
 pub struct MultipartQuery {
     #[serde(default)]
@@ -277,7 +277,7 @@ struct CompletedPartXml {
 
 /// `POST /{bucket}/{key}` is exclusively a multipart entry point (prompt §51's "plus
 /// multipart query variants") -- `?uploads` starts one, `?uploadId=X` (with a body
-/// listing parts) completes one. Nothing else in the S3 API this server implements uses
+/// listing parts) completes one. Nothing else in the LS3 API this server implements uses
 /// a bare POST on this route.
 pub async fn post_object(
     State(state): State<AppState>,
@@ -321,14 +321,14 @@ pub async fn post_object(
             .await
             .map_err(|e| {
                 ApiError::new(
-                    S3Error::InvalidArgument(format!("failed to read request body: {e}")),
+                    Ls3Error::InvalidArgument(format!("failed to read request body: {e}")),
                     rid.clone(),
                     Some(resource.clone()),
                 )
             })?;
         let text = std::str::from_utf8(&bytes).map_err(|_| {
             ApiError::new(
-                S3Error::InvalidArgument("request body is not valid UTF-8".into()),
+                Ls3Error::InvalidArgument("request body is not valid UTF-8".into()),
                 rid.clone(),
                 Some(resource.clone()),
             )
@@ -336,7 +336,7 @@ pub async fn post_object(
         let parsed: CompleteMultipartUploadRequest =
             quick_xml::de::from_str(text).map_err(|e| {
                 ApiError::new(
-                    S3Error::InvalidArgument(format!(
+                    Ls3Error::InvalidArgument(format!(
                         "malformed CompleteMultipartUpload body: {e}"
                     )),
                     rid.clone(),
@@ -371,7 +371,7 @@ pub async fn post_object(
     }
 
     Err(ApiError::new(
-        S3Error::InvalidArgument("unsupported operation".into()),
+        Ls3Error::InvalidArgument("unsupported operation".into()),
         rid,
         Some(resource),
     ))

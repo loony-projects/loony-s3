@@ -1,22 +1,22 @@
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use loony_auth::AuthError;
-use loony_object::S3Error;
+use loony_object::Ls3Error;
 
 use crate::xml;
 
-/// Wraps [`S3Error`] with the per-request context (request id, resource path) needed to
+/// Wraps [`Ls3Error`] with the per-request context (request id, resource path) needed to
 /// build a compliant `<Error>` body (prompt §57) — never leaking internal details:
-/// [`S3Error::Meta`]/[`S3Error::Storage`] always render as a generic `InternalError`,
+/// [`Ls3Error::Meta`]/[`Ls3Error::Storage`] always render as a generic `InternalError`,
 /// with the real error only going to the trace log.
 pub struct ApiError {
-    error: S3Error,
+    error: Ls3Error,
     request_id: String,
     resource: Option<String>,
 }
 
 impl ApiError {
-    pub fn new(error: S3Error, request_id: String, resource: Option<String>) -> Self {
+    pub fn new(error: Ls3Error, request_id: String, resource: Option<String>) -> Self {
         Self {
             error,
             request_id,
@@ -25,55 +25,55 @@ impl ApiError {
     }
 }
 
-fn map_error(error: &S3Error) -> (StatusCode, &'static str, String) {
+fn map_error(error: &Ls3Error) -> (StatusCode, &'static str, String) {
     match error {
-        S3Error::NoSuchBucket => (
+        Ls3Error::NoSuchBucket => (
             StatusCode::NOT_FOUND,
             "NoSuchBucket",
             "The specified bucket does not exist".into(),
         ),
-        S3Error::NoSuchKey => (
+        Ls3Error::NoSuchKey => (
             StatusCode::NOT_FOUND,
             "NoSuchKey",
             "The specified key does not exist".into(),
         ),
-        S3Error::BucketAlreadyExists => (
+        Ls3Error::BucketAlreadyExists => (
             StatusCode::CONFLICT,
             "BucketAlreadyExists",
             "The requested bucket name is not available".into(),
         ),
-        S3Error::BucketNotEmpty => (
+        Ls3Error::BucketNotEmpty => (
             StatusCode::CONFLICT,
             "BucketNotEmpty",
             "The bucket you tried to delete is not empty".into(),
         ),
-        S3Error::InvalidBucketName(reason) => {
+        Ls3Error::InvalidBucketName(reason) => {
             (StatusCode::BAD_REQUEST, "InvalidBucketName", reason.clone())
         }
-        S3Error::InvalidArgument(reason) => {
+        Ls3Error::InvalidArgument(reason) => {
             (StatusCode::BAD_REQUEST, "InvalidArgument", reason.clone())
         }
-        S3Error::AccessDenied => (
+        Ls3Error::AccessDenied => (
             StatusCode::FORBIDDEN,
             "AccessDenied",
             "Access Denied".to_string(),
         ),
-        S3Error::NoSuchUpload => (
+        Ls3Error::NoSuchUpload => (
             StatusCode::NOT_FOUND,
             "NoSuchUpload",
             "The specified multipart upload does not exist".into(),
         ),
-        S3Error::InvalidPart => (
+        Ls3Error::InvalidPart => (
             StatusCode::BAD_REQUEST,
             "InvalidPart",
             "One or more of the specified parts could not be found".into(),
         ),
-        S3Error::InvalidPartOrder => (
+        Ls3Error::InvalidPartOrder => (
             StatusCode::BAD_REQUEST,
             "InvalidPartOrder",
             "The list of parts was not in ascending order".into(),
         ),
-        S3Error::Meta(_) | S3Error::Storage(_) => (
+        Ls3Error::Meta(_) | Ls3Error::Storage(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
             "We encountered an internal error. Please try again.".into(),
@@ -84,7 +84,7 @@ fn map_error(error: &S3Error) -> (StatusCode, &'static str, String) {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         if self.error.is_internal() {
-            tracing::error!(error = %self.error, request_id = %self.request_id, "internal error handling S3 request");
+            tracing::error!(error = %self.error, request_id = %self.request_id, "internal error handling LS3 request");
         }
         let (status, code, message) = map_error(&self.error);
         let body = xml::error_xml(code, &message, &self.request_id, self.resource.as_deref());
@@ -93,8 +93,8 @@ impl IntoResponse for ApiError {
 }
 
 /// Maps a SigV4 verification failure straight to a response — used by the auth
-/// middleware, which runs before any handler and so has no [`S3Error`] to wrap. Codes
-/// mirror real S3's own vocabulary for these cases (prompt §57:
+/// middleware, which runs before any handler and so has no [`Ls3Error`] to wrap. Codes
+/// mirror the upstream protocol's own vocabulary for these cases (prompt §57:
 /// `SignatureDoesNotMatch`, `InvalidAccessKeyId`).
 pub fn auth_error_response(error: AuthError, request_id: String) -> Response {
     let (status, code, message): (StatusCode, &'static str, String) = match error {
@@ -121,7 +121,7 @@ pub fn auth_error_response(error: AuthError, request_id: String) -> Response {
         AuthError::UnknownAccessKey => (
             StatusCode::FORBIDDEN,
             "InvalidAccessKeyId",
-            "The AWS access key ID you provided does not exist in our records".into(),
+            "The access key ID you provided does not exist in our records".into(),
         ),
         AuthError::CredentialDisabled => (
             StatusCode::FORBIDDEN,
