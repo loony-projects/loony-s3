@@ -227,7 +227,11 @@ pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<Lis
         .clone()
         .map(|k| format!("{bucket_prefix}{k}"));
     let (range_start, exclusive_boundary): (String, Option<String>) = match &query.continuation_token {
-        Some(token) => (token.clone(), None),
+        Some(token) => {
+            let key = crate::cursor::decode(token).ok_or(MetaError::InvalidContinuationToken)?;
+            // Never resume before the requested prefix, whatever the token says.
+            (format!("{bucket_prefix}{key}").max(full_prefix.clone()), None)
+        }
         None => match &start_after_boundary {
             Some(boundary) => (boundary.clone(), Some(boundary.clone())),
             None => (full_prefix.clone(), None),
@@ -263,7 +267,7 @@ pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<Lis
                 if common_prefixes.last() != Some(&common) {
                     if objects.len() + common_prefixes.len() >= max_keys {
                         is_truncated = true;
-                        next_token = Some(row_key);
+                        next_token = Some(crate::cursor::encode(logical_key));
                         break;
                     }
                     common_prefixes.push(common);
@@ -274,7 +278,7 @@ pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<Lis
 
         if objects.len() + common_prefixes.len() >= max_keys {
             is_truncated = true;
-            next_token = Some(row_key);
+            next_token = Some(crate::cursor::encode(logical_key));
             break;
         }
 

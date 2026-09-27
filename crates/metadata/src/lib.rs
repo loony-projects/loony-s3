@@ -12,6 +12,7 @@
 //!   path rather than an equivalence argument about it. See docs/architecture.md §5.
 
 mod commands;
+mod cursor;
 mod error;
 mod raft;
 mod redb_store;

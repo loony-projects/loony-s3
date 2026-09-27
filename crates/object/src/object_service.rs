@@ -586,8 +586,7 @@ impl ObjectService {
         requesting_owner: OwnerId,
     ) -> Result<ListObjectsPage, Ls3Error> {
         let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
-        Ok(self
-            .metadata
+        self.metadata
             .list_objects(ListObjectsQuery {
                 bucket_id: bucket.bucket_id,
                 prefix: params.prefix,
@@ -596,7 +595,13 @@ impl ObjectService {
                 continuation_token: params.continuation_token,
                 max_keys: params.max_keys,
             })
-            .await?)
+            .await
+            .map_err(|e| match e {
+                MetaError::InvalidContinuationToken => {
+                    Ls3Error::InvalidArgument("the continuation token is not valid".into())
+                }
+                other => other.into(),
+            })
     }
 }
 

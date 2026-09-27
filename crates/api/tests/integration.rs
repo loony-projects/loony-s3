@@ -566,6 +566,64 @@ async fn list_objects_v2_prefix_delimiter_and_pagination() {
 }
 
 #[tokio::test]
+async fn continuation_tokens_are_xml_safe_and_page_through_everything() {
+    let app = test_app().await;
+    app.router.clone().oneshot(req("PUT", "/pages")).await.unwrap();
+    for key in ["a.txt", "b.txt", "dir1/x", "dir2/y", "z.txt"] {
+        app.router
+            .clone()
+            .oneshot(signed_request("PUT", &format!("/pages/{key}"), b"x".to_vec()))
+            .await
+            .unwrap();
+    }
+
+    // Page through two entries at a time, feeding each token back exactly as the
+    // server returned it -- the way every real client does.
+    let mut seen = Vec::new();
+    let mut token: Option<String> = None;
+    for _ in 0..10 {
+        let uri = match &token {
+            Some(t) => format!("/pages?list-type=2&delimiter=/&max-keys=2&continuation-token={t}"),
+            None => "/pages?list-type=2&delimiter=/&max-keys=2".to_string(),
+        };
+        let res = app.router.clone().oneshot(req("GET", &uri)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_string(res).await;
+        for tag in ["Key", "Prefix"] {
+            let open = format!("<{tag}>");
+            let close = format!("</{tag}>");
+            for chunk in body.split(open.as_str()).skip(1) {
+                let value = &chunk[..chunk.find(close.as_str()).unwrap()];
+                if !value.is_empty() {
+                    seen.push(value.to_string());
+                }
+            }
+        }
+        if !body.contains("<IsTruncated>true</IsTruncated>") {
+            token = None;
+            break;
+        }
+        let t = xml_tag(&body, "NextContinuationToken");
+        // XML 1.0 can't carry control characters at all -- a raw internal row key with
+        // its NUL separator made every truncated listing unparseable by real clients.
+        assert!(t.chars().all(|c| c.is_ascii_hexdigit()), "token {t:?} is not opaque/XML-safe");
+        token = Some(t);
+    }
+    assert!(token.is_none(), "listing never finished");
+    seen.sort();
+    assert_eq!(seen, ["a.txt", "b.txt", "dir1/", "dir2/", "z.txt"]);
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req("GET", "/pages?list-type=2&continuation-token=not-a-token"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(body_string(res).await.contains("<Code>InvalidArgument</Code>"));
+}
+
+#[tokio::test]
 async fn response_headers_carry_a_request_id() {
     let app = test_app().await;
     let res = app.router.clone().oneshot(req("GET", "/")).await.unwrap();

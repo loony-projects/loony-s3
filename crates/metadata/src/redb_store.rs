@@ -259,8 +259,8 @@ impl MetadataStore for RedbMetadataStore {
             let key_prefix = query.prefix.clone().unwrap_or_default();
             let full_prefix = format!("{bucket_prefix}{key_prefix}");
 
-            // `continuation_token` is our own opaque cursor: it's always exactly the
-            // row key of the first not-yet-returned item, so resuming from it means
+            // `continuation_token` is our own opaque cursor (see `cursor.rs`): it encodes
+            // the key of the first not-yet-returned item, so resuming from it means
             // ranging from it inclusively with no further skipping. `start_after` is a
             // client-supplied literal key with the upstream protocol's exclusive-lower-bound semantics,
             // so it ranges from the same point but the boundary row itself is skipped.
@@ -270,7 +270,12 @@ impl MetadataStore for RedbMetadataStore {
                 .map(|k| format!("{bucket_prefix}{k}"));
             let (range_start, exclusive_boundary): (String, Option<String>) =
                 match &query.continuation_token {
-                    Some(token) => (token.clone(), None),
+                    Some(token) => {
+                        let key = crate::cursor::decode(token)
+                            .ok_or(MetaError::InvalidContinuationToken)?;
+                        // Never resume before the requested prefix, whatever the token says.
+                        (format!("{bucket_prefix}{key}").max(full_prefix.clone()), None)
+                    }
                     None => match &start_after_boundary {
                         Some(boundary) => (boundary.clone(), Some(boundary.clone())),
                         None => (full_prefix.clone(), None),
@@ -306,7 +311,7 @@ impl MetadataStore for RedbMetadataStore {
                         if common_prefixes.last() != Some(&common) {
                             if objects.len() + common_prefixes.len() >= max_keys {
                                 is_truncated = true;
-                                next_token = Some(row_key);
+                                next_token = Some(crate::cursor::encode(logical_key));
                                 break;
                             }
                             common_prefixes.push(common);
@@ -317,7 +322,7 @@ impl MetadataStore for RedbMetadataStore {
 
                 if objects.len() + common_prefixes.len() >= max_keys {
                     is_truncated = true;
-                    next_token = Some(row_key);
+                    next_token = Some(crate::cursor::encode(logical_key));
                     break;
                 }
 

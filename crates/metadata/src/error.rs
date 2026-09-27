@@ -25,6 +25,9 @@ pub enum MetaError {
     #[error("the list of parts was not in ascending order")]
     InvalidPartOrder,
 
+    #[error("the continuation token is not valid")]
+    InvalidContinuationToken,
+
     #[error("node {0} is not registered in this cluster")]
     NoSuchNode(String),
 
