@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent } from 'react';
+import { useEffect, useMemo, useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, FolderOpen, Database } from 'lucide-react';
 import { listBuckets, createBucket, deleteBucket, Bucket } from '@/api/buckets';
@@ -8,11 +8,18 @@ import { Modal } from '@/components/Modal';
 import { Spinner } from '@/components/Spinner';
 import { EmptyState } from '@/components/EmptyState';
 
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
+import { formatDate } from '@/lib/format';
+
+type BucketSort = 'name-asc' | 'name-desc' | 'newest' | 'oldest';
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+const bucketComparators: Record<BucketSort, (a: Bucket, b: Bucket) => number> = {
+  'name-asc': (a, b) => collator.compare(a.name, b.name),
+  'name-desc': (a, b) => collator.compare(b.name, a.name),
+  newest: (a, b) => Date.parse(b.creationDate) - Date.parse(a.creationDate),
+  oldest: (a, b) => Date.parse(a.creationDate) - Date.parse(b.creationDate),
+};
 
 export function DashboardPage() {
   const [buckets, setBuckets] = useState<Bucket[]>([]);
@@ -21,7 +28,10 @@ export function DashboardPage() {
   const [createName, setCreateName] = useState('');
   const [creating, setCreating] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [sort, setSort] = useState<BucketSort>('name-asc');
   const toast = useToast();
+
+  const sortedBuckets = useMemo(() => [...buckets].sort(bucketComparators[sort]), [buckets, sort]);
   const navigate = useNavigate();
 
   async function load() {
@@ -76,13 +86,26 @@ export function DashboardPage() {
           <h1 className="text-xl font-semibold text-gray-900">Buckets</h1>
           <p className="text-sm text-gray-500 mt-0.5">{buckets.length} bucket{buckets.length !== 1 ? 's' : ''}</p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Create bucket
-        </button>
+        <div className="flex items-center gap-2">
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as BucketSort)}
+            aria-label="Sort buckets"
+            className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="name-asc">Name (A–Z)</option>
+            <option value="name-desc">Name (Z–A)</option>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Create bucket
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -103,7 +126,7 @@ export function DashboardPage() {
         />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {buckets.map((bucket) => (
+          {sortedBuckets.map((bucket) => (
             <div
               key={bucket.name}
               className="bg-white border border-gray-200 rounded-xl p-5 hover:border-blue-300 hover:shadow-sm transition-all group"

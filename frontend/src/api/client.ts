@@ -1,5 +1,5 @@
 import { useAuthStore } from '@/store/useAuthStore';
-import { amzDateNow, signHeaderAuth, signPresignedQuery, sha256Hex, EMPTY_BODY_SHA256, buildQueryString } from './sigv4';
+import { amzDateNow, signHeaderAuth, signPresignedQuery, sha256Hex, EMPTY_BODY_SHA256, buildQueryString, uriEncode } from './sigv4';
 import { parseLs3Error } from './xml';
 
 export class ApiError extends Error {
@@ -13,7 +13,7 @@ export class ApiError extends Error {
   }
 }
 
-interface Credentials {
+export interface Credentials {
   accessKey: string;
   secretKey: string;
   region: string;
@@ -28,8 +28,17 @@ export function getCredentials(): Credentials {
   return { accessKey, secretKey, region: region || 'us-east-1', endpoint };
 }
 
-function hostOf(endpoint: string): string {
+export function hostOf(endpoint: string): string {
   return new URL(endpoint).host;
+}
+
+/**
+ * The URL a request is actually sent to. The path gets the same `uriEncode` pass the
+ * signature's canonical URI uses -- sending it raw would let the browser truncate a key
+ * at `#`/`?` (or otherwise re-encode it) and desync what's sent from what was signed.
+ */
+export function requestUrl(endpoint: string, path: string, qs: string): string {
+  return `${endpoint}${uriEncode(path, false)}${qs ? `?${qs}` : ''}`;
 }
 
 export interface SignedRequestOptions {
@@ -39,6 +48,7 @@ export interface SignedRequestOptions {
   unsignedPayload?: boolean;
   extraHeaders?: Record<string, string>;
   credentials?: Credentials;
+  signal?: AbortSignal;
 }
 
 /**
@@ -95,10 +105,8 @@ export async function signedFetch(method: string, path: string, opts: SignedRequ
 
   const fetchHeaders: Record<string, string> = { ...opts.extraHeaders, 'x-amz-date': amzDate, 'x-amz-content-sha256': payloadHash, authorization };
 
-  const qs = buildQueryString(query);
-  const url = `${creds.endpoint}${path}${qs ? `?${qs}` : ''}`;
-
-  return fetch(url, { method, headers: fetchHeaders, body: opts.body });
+  const url = requestUrl(creds.endpoint, path, buildQueryString(query));
+  return fetch(url, { method, headers: fetchHeaders, body: opts.body, signal: opts.signal });
 }
 
 /** `signedFetch`, but throwing `ApiError` (parsed from the LS3 `<Error>` body when
@@ -112,11 +120,12 @@ export async function request(method: string, path: string, opts: SignedRequestO
   throw new ApiError(res.status, parsed?.message || res.statusText, parsed?.code);
 }
 
-export async function presignedGetUrl(path: string, expiresSecs: number): Promise<string> {
+/** A presigned URL for `method` on `path` -- usable by anyone holding it, until it expires. */
+export async function presignedUrl(method: 'GET' | 'PUT', path: string, expiresSecs: number): Promise<string> {
   const creds = getCredentials();
   const host = hostOf(creds.endpoint);
   const qs = await signPresignedQuery({
-    method: 'GET',
+    method,
     path,
     headers: { host },
     signedHeaders: ['host'],
@@ -126,5 +135,5 @@ export async function presignedGetUrl(path: string, expiresSecs: number): Promis
     amzDate: amzDateNow(),
     expiresSecs,
   });
-  return `${creds.endpoint}${path}?${qs}`;
+  return requestUrl(creds.endpoint, path, qs);
 }
