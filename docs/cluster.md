@@ -118,3 +118,7 @@ directly (not gossip-based) with simple hysteresis: a node needs 3 consecutive m
 heartbeats to flip to `Suspect` and 6 to flip to `Offline`, so one blip in an otherwise
 healthy network doesn't cause churn. A node that restarts and rejoins gets a bumped
 `generation` number in the registry, distinguishing it from its pre-restart incarnation.
+
+An operator can also drain or remove a node through the [admin panel](admin.md). Those
+states don't get overwritten by heartbeats or by the node restarting, but draining doesn't
+migrate data: it only stops new data going to the node.

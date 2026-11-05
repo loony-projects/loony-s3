@@ -139,7 +139,7 @@ See `docs/architecture.md` §3 for the full crate-dependency diagram. Short vers
 - `auth` — SigV4 + presigned URLs
 - `api` — thin Axum HTTP layer
 - `healing` — scrubbing, healing, GC, rebalancing
-- `admin` / `admin-cli` — admin API + CLI
+- `admin` / `admin-cli` — admin API (see [docs/admin.md](docs/admin.md)) + CLI (not implemented yet)
 - `observability` — tracing/metrics
 - `server` — the `server` binary, wires everything together
 

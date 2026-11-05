@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 
 use crate::commands::{
     Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
-    RegisterNode,
+    RegisterNode, StorageStats,
 };
 use crate::error::MetaError;
 use crate::raft::types::{
@@ -85,6 +85,9 @@ pub(crate) fn apply_metadata_command(
         }
         MetadataCommand::AbortMultipart(upload_id) => abort_multipart(db, upload_id).map(|_| CommandResponse::Unit),
         MetadataCommand::PutCredential(cred) => put_credential(db, *cred).map(|_| CommandResponse::Unit),
+        MetadataCommand::DeleteCredential(access_key) => {
+            delete_credential(db, &access_key).map(|_| CommandResponse::Unit)
+        }
         MetadataCommand::BootstrapCluster(id) => bootstrap_cluster(db, id).map(|_| CommandResponse::Unit),
         MetadataCommand::RegisterNode(cmd) => register_node(db, cmd).map(|n| CommandResponse::NodeInfo(Box::new(n))),
         MetadataCommand::UpdateNodeState(node_id, state) => {
@@ -173,6 +176,53 @@ pub(crate) fn list_buckets(db: &Database, owner: OwnerId) -> Result<Vec<Bucket>,
     }
     result.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
     Ok(result)
+}
+
+pub(crate) fn list_all_buckets(db: &Database) -> Result<Vec<Bucket>, MetaError> {
+    let read_txn = db.begin_read().map_err(db_err)?;
+    let table = read_txn.open_table(BUCKETS).map_err(db_err)?;
+    let mut result = Vec::new();
+    for entry in table.iter().map_err(db_err)? {
+        let (_key, value) = entry.map_err(db_err)?;
+        result.push(serde_json::from_slice::<Bucket>(value.value())?);
+    }
+    result.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
+    Ok(result)
+}
+
+pub(crate) fn storage_stats(db: &Database) -> Result<StorageStats, MetaError> {
+    fn count_shards(stats: &mut StorageStats, part: &PartManifest) {
+        for shard in part.stripes.iter().flat_map(|stripe| &stripe.shards) {
+            *stats.shards_by_node.entry(shard.node_id).or_default() += 1;
+        }
+    }
+
+    let read_txn = db.begin_read().map_err(db_err)?;
+    let mut stats = StorageStats::default();
+
+    let objects = read_txn.open_table(OBJECTS).map_err(db_err)?;
+    for entry in objects.iter().map_err(db_err)? {
+        let (_key, value) = entry.map_err(db_err)?;
+        let manifest: ObjectManifest = serde_json::from_slice(value.value())?;
+        let usage = stats.buckets.entry(manifest.bucket_id).or_default();
+        usage.object_count += 1;
+        usage.total_bytes += manifest.total_size();
+        for part in &manifest.parts {
+            count_shards(&mut stats, part);
+        }
+    }
+
+    let uploads = read_txn.open_table(MULTIPART).map_err(db_err)?;
+    for entry in uploads.iter().map_err(db_err)? {
+        let (_key, value) = entry.map_err(db_err)?;
+        let upload: MultipartUploadState = serde_json::from_slice(value.value())?;
+        stats.multipart_uploads += 1;
+        for part in upload.parts.values() {
+            count_shards(&mut stats, part);
+        }
+    }
+
+    Ok(stats)
 }
 
 pub(crate) fn commit_manifest(db: &Database, manifest: ObjectManifest) -> Result<ObjectManifest, MetaError> {
@@ -503,6 +553,27 @@ pub(crate) fn get_credential(db: &Database, access_key: &str) -> Result<Option<C
     }
 }
 
+pub(crate) fn list_credentials(db: &Database) -> Result<Vec<Credential>, MetaError> {
+    let read_txn = db.begin_read().map_err(db_err)?;
+    let table = read_txn.open_table(CREDENTIALS).map_err(db_err)?;
+    let mut result = Vec::new();
+    for entry in table.iter().map_err(db_err)? {
+        let (_key, value) = entry.map_err(db_err)?;
+        result.push(serde_json::from_slice(value.value())?);
+    }
+    Ok(result)
+}
+
+pub(crate) fn delete_credential(db: &Database, access_key: &str) -> Result<(), MetaError> {
+    let write_txn = db.begin_write().map_err(db_err)?;
+    {
+        let mut table = write_txn.open_table(CREDENTIALS).map_err(db_err)?;
+        table.remove(access_key).map_err(db_err)?;
+    }
+    write_txn.commit().map_err(db_err)?;
+    Ok(())
+}
+
 pub(crate) fn bootstrap_cluster(db: &Database, cluster_id: ClusterId) -> Result<(), MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
     {
@@ -538,22 +609,64 @@ pub(crate) fn get_cluster_id(db: &Database) -> Result<Option<ClusterId>, MetaErr
     }
 }
 
+/// The state a (re)registering node ends up in. A restart must not undo an operator's
+/// decision, so a draining node stays draining and a removed node can't come back.
+pub(crate) fn registration_state(
+    node_id: NodeId,
+    existing: Option<NodeState>,
+) -> Result<NodeState, MetaError> {
+    match existing {
+        Some(NodeState::Removed) => Err(MetaError::NodeRemoved(node_id.to_string())),
+        Some(NodeState::Draining) => Ok(NodeState::Draining),
+        _ => Ok(NodeState::Joining),
+    }
+}
+
+/// Node states an operator controls can't be overwritten by automation: the heartbeat
+/// loop reads a node's state, waits on a network call, then writes the outcome, so a
+/// drain landing in between would otherwise be silently reverted to `Healthy`. Leaving
+/// `Draining` means `Joining` (an explicit resume, which heartbeats then promote) or
+/// `Removed`, the only way to reach `Removed`, and which is final.
+pub(crate) fn check_node_transition(
+    node_id: NodeId,
+    from: NodeState,
+    to: NodeState,
+) -> Result<(), MetaError> {
+    let allowed = from == to
+        || match (from, to) {
+            (NodeState::Removed, _) => false,
+            (NodeState::Draining, target) => {
+                matches!(target, NodeState::Joining | NodeState::Removed)
+            }
+            (_, NodeState::Removed) => false,
+            _ => true,
+        };
+    if allowed {
+        Ok(())
+    } else {
+        Err(MetaError::InvalidNodeTransition {
+            node: node_id.to_string(),
+            from: format!("{from:?}"),
+            to: format!("{to:?}"),
+        })
+    }
+}
+
 pub(crate) fn register_node(db: &Database, cmd: RegisterNode) -> Result<NodeInfo, MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
     let info = {
         let mut table = write_txn.open_table(NODES).map_err(db_err)?;
         let key = cmd.node_id.to_string();
-        let generation = match table.get(key.as_str()).map_err(db_err)? {
-            Some(guard) => {
-                let existing: NodeInfo = serde_json::from_slice(guard.value())?;
-                existing.generation + 1
-            }
-            None => 0,
+        let existing: Option<NodeInfo> = match table.get(key.as_str()).map_err(db_err)? {
+            Some(guard) => Some(serde_json::from_slice(guard.value())?),
+            None => None,
         };
+        let state = registration_state(cmd.node_id, existing.as_ref().map(|n| n.state))?;
+        let generation = existing.map_or(0, |n| n.generation + 1);
         let info = NodeInfo {
             node_id: cmd.node_id,
             advertised_address: cmd.advertised_address,
-            state: NodeState::Joining,
+            state,
             generation,
             last_seen: OffsetDateTime::now_utc(),
             failure_domain: cmd.failure_domain,
@@ -576,6 +689,7 @@ pub(crate) fn update_node_state(db: &Database, node_id: NodeId, state: NodeState
             Some(guard) => serde_json::from_slice(guard.value())?,
             None => return Err(MetaError::NoSuchNode(key)),
         };
+        check_node_transition(node_id, info.state, state)?;
         info.state = state;
         info.last_seen = OffsetDateTime::now_utc();
         let bytes = serde_json::to_vec(&info)?;

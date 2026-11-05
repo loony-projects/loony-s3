@@ -23,7 +23,7 @@ use loony_core::{
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, PartSummary, RegisterNode,
+    MultipartUploadState, PartSummary, RegisterNode, StorageStats,
 };
 use crate::error::MetaError;
 use crate::raft::applier::{self, db_err};
@@ -38,6 +38,16 @@ use crate::store::MetadataStore;
 pub struct RaftMetadataStore {
     raft: Raft<TypeConfig>,
     db: Arc<Database>,
+}
+
+/// This node's current view of the metadata group, for operator tooling.
+#[derive(Debug, Clone)]
+pub struct RaftStatus {
+    pub server_state: String,
+    pub current_term: u64,
+    pub leader: Option<NodeId>,
+    pub voters: Vec<NodeId>,
+    pub learners: Vec<NodeId>,
 }
 
 fn create_tables(db: &Database) -> Result<(), MetaError> {
@@ -142,6 +152,29 @@ impl RaftMetadataStore {
         &self.raft
     }
 
+    pub fn raft_status(&self) -> RaftStatus {
+        let metrics = self.raft.metrics().borrow().clone();
+        let membership = metrics.membership_config.membership();
+        RaftStatus {
+            server_state: format!("{:?}", metrics.state),
+            current_term: metrics.current_term,
+            leader: metrics.current_leader,
+            voters: membership.voter_ids().collect(),
+            learners: membership.learner_ids().collect(),
+        }
+    }
+
+    /// Stops replicating metadata to a learner and drops it from the group's membership.
+    /// A no-op if it's no longer a member. Refused by Raft for a voter.
+    pub async fn remove_learner(&self, node_id: NodeId) -> Result<(), MetaError> {
+        let change = openraft::ChangeMembers::RemoveNodes(std::iter::once(node_id).collect());
+        tokio::time::timeout(WRITE_TIMEOUT, self.raft.change_membership(change, false))
+            .await
+            .map_err(|_| MetaError::RaftUnavailable("membership change timed out".into()))?
+            .map_err(|e| MetaError::RaftUnavailable(e.to_string()))?;
+        Ok(())
+    }
+
     async fn read<F, T>(&self, f: F) -> Result<T, MetaError>
     where
         F: FnOnce(&Database) -> Result<T, MetaError> + Send + 'static,
@@ -205,6 +238,14 @@ impl MetadataStore for RaftMetadataStore {
     async fn get_bucket(&self, name: &BucketName) -> Result<Option<Bucket>, MetaError> {
         let name = name.clone();
         self.read(move |db| applier::get_bucket(db, &name)).await
+    }
+
+    async fn list_all_buckets(&self) -> Result<Vec<Bucket>, MetaError> {
+        self.read(applier::list_all_buckets).await
+    }
+
+    async fn storage_stats(&self) -> Result<StorageStats, MetaError> {
+        self.read(applier::storage_stats).await
     }
 
     async fn list_buckets(&self, owner: OwnerId) -> Result<Vec<Bucket>, MetaError> {
@@ -295,6 +336,15 @@ impl MetadataStore for RaftMetadataStore {
     async fn get_credential(&self, access_key: &str) -> Result<Option<Credential>, MetaError> {
         let access_key = access_key.to_string();
         self.read(move |db| applier::get_credential(db, &access_key)).await
+    }
+
+    async fn list_credentials(&self) -> Result<Vec<Credential>, MetaError> {
+        self.read(applier::list_credentials).await
+    }
+
+    async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError> {
+        self.write(MetadataCommand::DeleteCredential(access_key.to_string())).await?;
+        Ok(())
     }
 
     async fn bootstrap_cluster(&self, cluster_id: ClusterId) -> Result<(), MetaError> {

@@ -4,6 +4,7 @@ import { Navbar } from '@/components/Navbar';
 import { LoginPage } from '@/pages/LoginPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { BucketPage } from '@/pages/BucketPage';
+import { AdminLayout } from '@/pages/admin/AdminLayout';
 import { ReactNode } from 'react';
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -24,6 +25,7 @@ export function App() {
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/buckets/:name" element={<BucketPage />} />
+                <Route path="/admin/*" element={<AdminLayout />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </div>

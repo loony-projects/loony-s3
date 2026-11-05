@@ -31,6 +31,16 @@ pub enum MetaError {
     #[error("node {0} is not registered in this cluster")]
     NoSuchNode(String),
 
+    #[error("node {0} was removed from this cluster and cannot rejoin it")]
+    NodeRemoved(String),
+
+    #[error("node {node} cannot go from {from} to {to}")]
+    InvalidNodeTransition {
+        node: String,
+        from: String,
+        to: String,
+    },
+
     #[error(
         "this node already belongs to cluster {existing:?} and cannot join/bootstrap cluster {requested:?} \
          — refusing to silently merge unrelated clusters"

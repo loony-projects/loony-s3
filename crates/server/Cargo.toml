@@ -17,6 +17,7 @@ loony-observability = { path = "../observability" }
 loony-metadata = { path = "../metadata" }
 loony-object = { path = "../object" }
 loony-api = { path = "../api" }
+loony-admin = { path = "../admin" }
 loony-rpc = { path = "../rpc" }
 tokio.workspace = true
 clap.workspace = true

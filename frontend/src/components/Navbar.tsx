@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { Database, LogOut, KeyRound } from 'lucide-react';
+import { Database, LogOut, KeyRound, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 
 export function Navbar() {
@@ -17,12 +17,16 @@ export function Navbar() {
         <div className="flex items-center justify-between h-14">
           <Link to="/" className="flex items-center gap-2 font-semibold text-gray-900 hover:text-blue-600 transition-colors">
             <Database className="w-5 h-5 text-blue-600" />
-            <span>Loony LS3</span>
+            <span className="whitespace-nowrap">Loony LS3</span>
           </Link>
 
           {accessKey && (
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-sm text-gray-600" title={accessKey}>
+              <Link to="/admin" className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-blue-600 transition-colors">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Admin</span>
+              </Link>
+              <div className="hidden sm:flex items-center gap-2 text-sm text-gray-600" title={accessKey}>
                 <KeyRound className="w-4 h-4" />
                 <span className="font-mono">{accessKey.slice(0, 12)}…</span>
               </div>
@@ -31,7 +35,7 @@ export function Navbar() {
                 className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 transition-colors"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Sign out</span>
+                <span className="whitespace-nowrap">Sign out</span>
               </button>
             </div>
           )}

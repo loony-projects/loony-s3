@@ -128,6 +128,18 @@ async fn join(
         .into());
     }
 
+    // Checked up front as well as in `register_node`: by then a removed node would
+    // already be back in the Raft group as a learner.
+    let already_removed = state
+        .metadata
+        .list_nodes()
+        .await?
+        .iter()
+        .any(|n| n.node_id == req.node_id && n.state == loony_core::NodeState::Removed);
+    if already_removed {
+        return Err(loony_metadata::MetaError::NodeRemoved(req.node_id.to_string()).into());
+    }
+
     if let Some(raft) = &state.raft {
         let node = openraft::BasicNode::new(req.advertised_address.clone());
         tokio::time::timeout(

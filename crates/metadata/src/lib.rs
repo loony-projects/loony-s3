@@ -19,10 +19,13 @@ mod redb_store;
 mod store;
 
 pub use commands::{
-    BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode,
+    BeginMultipart, BucketUsage, CompleteMultipart, CreateBucket, Credential, ListObjectsPage,
+    ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary, RegisterNode, StorageStats,
 };
 pub use error::MetaError;
-pub use raft::{CommandResponse, CommandResult, MetadataCommand, NoopNetworkFactory, Raft, RaftMetadataStore, TypeConfig};
+pub use raft::{
+    CommandResponse, CommandResult, MetadataCommand, NoopNetworkFactory, Raft, RaftMetadataStore,
+    RaftStatus, TypeConfig,
+};
 pub use redb_store::RedbMetadataStore;
 pub use store::MetadataStore;

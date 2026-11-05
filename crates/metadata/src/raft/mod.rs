@@ -2,7 +2,7 @@
 //! `redb_store.rs` implements directly for the pre-Raft single-voter case (see this
 //! crate's top-level `lib.rs` doc and architecture.md §5).
 
-mod applier;
+pub(crate) mod applier;
 mod log_store;
 mod network;
 mod snapshot;
@@ -13,5 +13,5 @@ mod tests;
 mod types;
 
 pub use network::NoopNetworkFactory;
-pub use store::RaftMetadataStore;
+pub use store::{RaftMetadataStore, RaftStatus};
 pub use types::{CommandResponse, CommandResult, MetadataCommand, Raft, TypeConfig};

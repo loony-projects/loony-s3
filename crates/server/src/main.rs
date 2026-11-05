@@ -198,6 +198,32 @@ async fn main() -> std::process::ExitCode {
         volumes
     };
 
+    let admin_router = loony_admin::build_router(loony_admin::AdminState {
+        metadata: metadata.clone(),
+        audit: Arc::new(loony_admin::AuditLog::new(config.data_dir.join("audit.jsonl"))),
+        region: config.region.clone(),
+        node_id: identity.node_id,
+        mode: match config.mode {
+            Mode::Standalone => "standalone",
+            Mode::Cluster => "cluster",
+        },
+        started_at: time::OffsetDateTime::now_utc(),
+    });
+    let admin_listener = match tokio::net::TcpListener::bind(config.admin_addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!(%err, addr = %config.admin_addr, "failed to bind admin API address");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    tracing::info!(addr = %config.admin_addr, "admin API listening");
+    eprintln!("server: admin API listening on http://{}", config.admin_addr);
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(admin_listener, admin_router).await {
+            tracing::error!(%err, "admin API exited with an error");
+        }
+    });
+
     let state = AppState {
         buckets: Arc::new(BucketService::new(metadata.clone())),
         objects: Arc::new(ObjectService::new(
@@ -460,6 +486,7 @@ async fn seed_root_credential(
             secret_key: secret_key.clone(),
             owner_id,
             enabled: true,
+            admin: true,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await?;

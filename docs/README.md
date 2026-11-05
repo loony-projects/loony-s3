@@ -7,6 +7,8 @@
 - **[api-reference.md](api-reference.md)** — the exact LS3 API surface: supported
   operations, auth, naming rules, durability behavior, error codes. What's implemented
   and what genuinely isn't yet.
+- **[admin.md](admin.md)** — the admin panel and API: how to reach them, and what each
+  operation does and doesn't do.
 - **[cluster.md](cluster.md)** — running more than one node, and a precise statement of
   what's actually distributed today versus what isn't yet.
 - **[architecture.md](architecture.md)** — the design document: *why* it's built this

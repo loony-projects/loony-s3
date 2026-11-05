@@ -12,7 +12,7 @@ it.
 | `LS3_MODE` | `--mode standalone\|cluster` | — | yes | Selects standalone vs. cluster mode. |
 | `LS3_DATA_DIR` | — | — | yes | Root of this node's persistent state: `NODE_ID`, `meta.redb`, and (unless `LS3_VOLUME_PATHS` is set) `volumes/vol-0`. |
 | `LS3_BIND_ADDR` | — | `0.0.0.0:7353` | no | Where the public LS3 API listens. |
-| `LS3_ADMIN_ADDR` | — | `0.0.0.0:9001` | no | Reserved for an admin API. Parsed and logged at startup but **nothing is bound to it yet** — `loony-admin`/`loony-admin-cli` are stubs. |
+| `LS3_ADMIN_ADDR` | — | `127.0.0.1:7253` | no | Where the [admin API](admin.md) listens. Must be a loopback address: the server refuses to start otherwise. |
 | `LS3_REGION` | — | `us-east-1` | no | SigV4 region scope this server verifies requests against. Clients must match it. |
 | `LS3_VOLUME_PATHS` | — | `<LS3_DATA_DIR>/volumes/vol-0` | no | Comma-separated local volume directories. More volumes → a wider erasure-coding scheme becomes available (see [api-reference.md](api-reference.md)). |
 | `LS3_NODE_ID` | `--node-id <uuid>` | auto-generated on first start | no | Pins this process to a specific persistent node identity. Must match what's already in `$LS3_DATA_DIR/NODE_ID` if that file exists — the server refuses to start otherwise. |
@@ -41,6 +41,7 @@ $LS3_DATA_DIR/
 ├── NODE_ID           # this node's persistent identity, minted once
 ├── meta.redb         # metadata: buckets, objects, credentials, node registry,
 │                      # cluster identity — a real openraft-backed store (Phase 8)
+├── audit.jsonl       # this node's admin audit log (see admin.md)
 └── volumes/
     └── vol-0/         # one directory per LS3_VOLUME_PATHS entry; shard bytes
 ```

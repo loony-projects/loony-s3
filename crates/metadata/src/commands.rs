@@ -3,7 +3,7 @@
 //! directly — see architecture.md §5/§26 for why Phase 2 doesn't wire real `openraft`
 //! yet: with exactly one voter, a replicated log and a plain WAL are the same thing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use loony_core::{
     BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId, VolumeId,
@@ -100,6 +100,29 @@ pub struct Credential {
     pub secret_key: String,
     pub owner_id: OwnerId,
     pub enabled: bool,
+    /// Whether this key may call the admin API. Only the configured root credential is
+    /// ever seeded with this set; keys created through the admin API never are. Defaults
+    /// to `false` so records written before this field existed stay non-admin until the
+    /// root credential is re-seeded at startup.
+    #[serde(default)]
+    pub admin: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BucketUsage {
+    pub object_count: u64,
+    pub total_bytes: u64,
+}
+
+/// Cluster-wide usage, computed by scanning every manifest and in-progress upload, so
+/// its cost grows with the object count. For occasional operator views, not hot paths.
+#[derive(Debug, Clone, Default)]
+pub struct StorageStats {
+    pub buckets: HashMap<BucketId, BucketUsage>,
+    /// How many shards each node holds, counting committed objects and in-progress
+    /// multipart parts: a node with a non-zero count can't be safely removed.
+    pub shards_by_node: HashMap<NodeId, u64>,
+    pub multipart_uploads: u64,
 }

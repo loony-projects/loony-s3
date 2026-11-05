@@ -23,9 +23,10 @@ use time::OffsetDateTime;
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode,
+    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode, StorageStats,
 };
 use crate::error::MetaError;
+use crate::raft::applier;
 use crate::store::MetadataStore;
 
 const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
@@ -176,6 +177,24 @@ impl MetadataStore for RedbMetadataStore {
             }
         })
         .await
+    }
+
+    async fn list_all_buckets(&self) -> Result<Vec<Bucket>, MetaError> {
+        self.blocking(applier::list_all_buckets).await
+    }
+
+    async fn storage_stats(&self) -> Result<StorageStats, MetaError> {
+        self.blocking(applier::storage_stats).await
+    }
+
+    async fn list_credentials(&self) -> Result<Vec<Credential>, MetaError> {
+        self.blocking(applier::list_credentials).await
+    }
+
+    async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError> {
+        let access_key = access_key.to_string();
+        self.blocking(move |db| applier::delete_credential(db, &access_key))
+            .await
     }
 
     async fn list_buckets(&self, owner: OwnerId) -> Result<Vec<Bucket>, MetaError> {
@@ -634,17 +653,19 @@ impl MetadataStore for RedbMetadataStore {
             let info = {
                 let mut table = write_txn.open_table(NODES).map_err(db_err)?;
                 let key = cmd.node_id.to_string();
-                let generation = match table.get(key.as_str()).map_err(db_err)? {
-                    Some(guard) => {
-                        let existing: NodeInfo = serde_json::from_slice(guard.value())?;
-                        existing.generation + 1
-                    }
-                    None => 0,
+                let existing: Option<NodeInfo> = match table.get(key.as_str()).map_err(db_err)? {
+                    Some(guard) => Some(serde_json::from_slice(guard.value())?),
+                    None => None,
                 };
+                let state = applier::registration_state(
+                    cmd.node_id,
+                    existing.as_ref().map(|n| n.state),
+                )?;
+                let generation = existing.map_or(0, |n| n.generation + 1);
                 let info = NodeInfo {
                     node_id: cmd.node_id,
                     advertised_address: cmd.advertised_address,
-                    state: NodeState::Joining,
+                    state,
                     generation,
                     last_seen: OffsetDateTime::now_utc(),
                     failure_domain: cmd.failure_domain,
@@ -672,6 +693,7 @@ impl MetadataStore for RedbMetadataStore {
                     Some(guard) => serde_json::from_slice(guard.value())?,
                     None => return Err(MetaError::NoSuchNode(key)),
                 };
+                applier::check_node_transition(node_id, info.state, state)?;
                 info.state = state;
                 info.last_seen = OffsetDateTime::now_utc();
                 let bytes = serde_json::to_vec(&info)?;
@@ -1110,6 +1132,7 @@ mod tests {
             secret_key: "shh".into(),
             owner_id: OwnerId::new(),
             enabled: true,
+            admin: false,
             created_at: OffsetDateTime::now_utc(),
         };
         store.put_credential(cred.clone()).await.unwrap();
@@ -1240,5 +1263,84 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(store.list_nodes().await.unwrap().len(), 3);
+    }
+
+    fn register_cmd(node_id: NodeId) -> RegisterNode {
+        RegisterNode {
+            node_id,
+            advertised_address: "node-a:9100".into(),
+            failure_domain: vec![],
+            volumes: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_node_states_survive_automation_and_restarts() {
+        use loony_core::NodeState::{Draining, Healthy, Joining, Removed};
+        let store = store().await;
+        let node_id = NodeId::new();
+        let state = async |store: &RedbMetadataStore| {
+            store.list_nodes().await.unwrap()[0].state
+        };
+
+        store.register_node(register_cmd(node_id)).await.unwrap();
+        store.update_node_state(node_id, Healthy).await.unwrap();
+
+        // Only a drained node can be removed.
+        assert!(matches!(
+            store.update_node_state(node_id, Removed).await.unwrap_err(),
+            MetaError::InvalidNodeTransition { .. }
+        ));
+
+        store.update_node_state(node_id, Draining).await.unwrap();
+
+        // A heartbeat that started before the drain can't undo it...
+        assert!(store.update_node_state(node_id, Healthy).await.is_err());
+        assert_eq!(state(&store).await, Draining);
+        // ...and neither can the node restarting and re-registering.
+        store.register_node(register_cmd(node_id)).await.unwrap();
+        assert_eq!(state(&store).await, Draining);
+
+        // Resuming is explicit, and heartbeats take it from there.
+        store.update_node_state(node_id, Joining).await.unwrap();
+        store.update_node_state(node_id, Healthy).await.unwrap();
+
+        store.update_node_state(node_id, Draining).await.unwrap();
+        store.update_node_state(node_id, Removed).await.unwrap();
+
+        // Removal is final.
+        assert!(store.update_node_state(node_id, Joining).await.is_err());
+        assert!(matches!(
+            store.register_node(register_cmd(node_id)).await.unwrap_err(),
+            MetaError::NodeRemoved(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn credentials_can_be_listed_and_deleted() {
+        let store = store().await;
+        let cred = Credential {
+            access_key: "AKIA_LIST".into(),
+            secret_key: "shh".into(),
+            owner_id: OwnerId::new(),
+            enabled: true,
+            admin: false,
+            created_at: OffsetDateTime::now_utc(),
+        };
+        store.put_credential(cred).await.unwrap();
+        assert_eq!(store.list_credentials().await.unwrap().len(), 1);
+
+        store.delete_credential("AKIA_LIST").await.unwrap();
+        store.delete_credential("AKIA_LIST").await.unwrap(); // idempotent
+        assert!(store.list_credentials().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_credential_stored_before_the_admin_flag_existed_is_not_admin() {
+        let json = format!(
+            r#"{{"access_key":"a","secret_key":"s","owner_id":"{}","enabled":true,"created_at":"2026-01-01T00:00:00Z"}}"#,
+            OwnerId::new()
+        );
+        assert!(!serde_json::from_str::<Credential>(&json).unwrap().admin);
     }
 }

@@ -70,6 +70,7 @@ pub enum MetadataCommand {
     CompleteMultipart(Box<ResolvedCompleteMultipart>),
     AbortMultipart(UploadId),
     PutCredential(Box<Credential>),
+    DeleteCredential(String),
     BootstrapCluster(ClusterId),
     RegisterNode(RegisterNode),
     UpdateNodeState(NodeId, NodeState),

@@ -44,6 +44,7 @@ impl IntoResponse for RpcServerError {
             RpcServerError::Meta(MetaError::ClusterIdMismatch { .. }) => {
                 (StatusCode::CONFLICT, self.to_string()).into_response()
             }
+            RpcServerError::Meta(MetaError::NodeRemoved(_)) => StatusCode::CONFLICT.into_response(),
             RpcServerError::Meta(MetaError::NoSuchNode(_)) => StatusCode::NOT_FOUND.into_response(),
             RpcServerError::Meta(err) => {
                 tracing::error!(error = %err, "internal RPC request failed");

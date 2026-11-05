@@ -11,7 +11,7 @@ use loony_core::{
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, PartSummary, RegisterNode,
+    MultipartUploadState, PartSummary, RegisterNode, StorageStats,
 };
 use crate::error::MetaError;
 use loony_core::PartManifest;
@@ -22,6 +22,10 @@ pub trait MetadataStore: Send + Sync {
     async fn delete_bucket(&self, name: &BucketName) -> Result<(), MetaError>;
     async fn get_bucket(&self, name: &BucketName) -> Result<Option<Bucket>, MetaError>;
     async fn list_buckets(&self, owner: OwnerId) -> Result<Vec<Bucket>, MetaError>;
+    /// Every bucket regardless of owner. For the admin API only: LS3 requests are always
+    /// scoped to the caller's own buckets through [`Self::list_buckets`].
+    async fn list_all_buckets(&self) -> Result<Vec<Bucket>, MetaError>;
+    async fn storage_stats(&self) -> Result<StorageStats, MetaError>;
 
     /// Atomically make `manifest` the current version of its `(bucket_id, key)` — the
     /// visibility point every PUT/CompleteMultipart converges on (architecture.md §21).
@@ -55,6 +59,9 @@ pub trait MetadataStore: Send + Sync {
 
     async fn put_credential(&self, cred: Credential) -> Result<(), MetaError>;
     async fn get_credential(&self, access_key: &str) -> Result<Option<Credential>, MetaError>;
+    async fn list_credentials(&self) -> Result<Vec<Credential>, MetaError>;
+    /// Idempotent: deleting an unknown access key is not an error.
+    async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError>;
 
     /// Sets this store's cluster identity if it doesn't have one yet; idempotent (and
     /// safe to call again with the same id) once it does. Errors with
@@ -64,8 +71,11 @@ pub trait MetadataStore: Send + Sync {
     async fn get_cluster_id(&self) -> Result<Option<ClusterId>, MetaError>;
 
     /// Registers `node_id`, bumping `generation` if it was already registered
-    /// (architecture.md §34).
+    /// (architecture.md §34). A draining node stays draining across a re-registration,
+    /// and a removed node is refused with [`MetaError::NodeRemoved`].
     async fn register_node(&self, cmd: RegisterNode) -> Result<NodeInfo, MetaError>;
+    /// Fails with [`MetaError::InvalidNodeTransition`] if the node's current state doesn't
+    /// allow it: see `check_node_transition`.
     async fn update_node_state(&self, node_id: NodeId, state: NodeState) -> Result<(), MetaError>;
     async fn list_nodes(&self) -> Result<Vec<NodeInfo>, MetaError>;
 }

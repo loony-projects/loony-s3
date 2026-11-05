@@ -43,6 +43,7 @@ async fn test_app() -> TestApp {
             secret_key: SECRET_KEY.to_string(),
             owner_id,
             enabled: true,
+            admin: false,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await
@@ -326,6 +327,7 @@ async fn a_different_credential_cannot_touch_someone_elses_bucket() {
             secret_key: other_secret_key.to_string(),
             owner_id: OwnerId::new(),
             enabled: true,
+            admin: false,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await

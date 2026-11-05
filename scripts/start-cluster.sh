@@ -64,6 +64,7 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
   idx=$((i - 1))
   bind_port=$((7353 + idx))
   cluster_port=$((9100 + idx))
+  admin_addr="127.0.0.1:$((7253 + idx))"
   bind_addr="127.0.0.1:$bind_port"
   cluster_addr="127.0.0.1:$cluster_port"
   BIND_ADDRS[$i]="$bind_addr"
@@ -77,7 +78,7 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
   if [[ "$i" -eq 1 ]]; then
     echo "starting node 1 (bootstrap) -- api $bind_addr, cluster $cluster_addr"
     LS3_MODE=cluster LS3_CLUSTER_TOKEN="$CLUSTER_TOKEN" LS3_CLUSTER_ID="$CLUSTER_ID" \
-      LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_REGION="$REGION" \
+      LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_ADMIN_ADDR="$admin_addr" LS3_REGION="$REGION" \
       LS3_CLUSTER_ADDR="$cluster_addr" LS3_ADVERTISE_ADDR="$cluster_addr" \
       LS3_ROOT_ACCESS_KEY="$ACCESS_KEY" LS3_ROOT_SECRET_KEY="$SECRET_KEY" \
       nohup "$BIN" --mode cluster --bootstrap >"$log_file" 2>&1 &
@@ -91,7 +92,7 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
     seed="${CLUSTER_ADDRS[1]}"
     echo "starting node $i (join via $seed) -- api $bind_addr, cluster $cluster_addr"
     LS3_MODE=cluster LS3_CLUSTER_TOKEN="$CLUSTER_TOKEN" \
-      LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_REGION="$REGION" \
+      LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_ADMIN_ADDR="$admin_addr" LS3_REGION="$REGION" \
       LS3_CLUSTER_ADDR="$cluster_addr" LS3_ADVERTISE_ADDR="$cluster_addr" \
       nohup "$BIN" --mode cluster --join "$seed" >"$log_file" 2>&1 &
     echo $! >"$pid_file"

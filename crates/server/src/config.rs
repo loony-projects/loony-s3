@@ -60,6 +60,12 @@ pub enum ConfigError {
 
     #[error("--bootstrap requires a cluster id (--cluster-id or LS3_CLUSTER_ID)")]
     BootstrapRequiresClusterId,
+
+    #[error(
+        "LS3_ADMIN_ADDR must be a loopback address, not {0}: the admin API is local-only (use \
+         an SSH tunnel to reach it from another machine)"
+    )]
+    AdminAddrNotLoopback(SocketAddr),
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +123,10 @@ impl Config {
             .ok_or(ConfigError::Missing("LS3_DATA_DIR"))?;
 
         let bind_addr = parse_addr_or_default(env, "LS3_BIND_ADDR", "0.0.0.0:7353")?;
-        let admin_addr = parse_addr_or_default(env, "LS3_ADMIN_ADDR", "0.0.0.0:9001")?;
+        let admin_addr = parse_addr_or_default(env, "LS3_ADMIN_ADDR", "127.0.0.1:7253")?;
+        if !admin_addr.ip().is_loopback() {
+            return Err(ConfigError::AdminAddrNotLoopback(admin_addr));
+        }
         let region = env
             .get("LS3_REGION")
             .unwrap_or_else(|| "us-east-1".to_string());
@@ -229,6 +238,20 @@ mod tests {
             config.volume_paths,
             vec![PathBuf::from("/data/volumes/vol-0")]
         );
+    }
+
+    #[test]
+    fn admin_addr_defaults_to_loopback_and_refuses_anything_else() {
+        let base = [("LS3_MODE", "standalone"), ("LS3_DATA_DIR", "/data")];
+        let config = Config::load(empty_cli(), &FakeEnv(HashMap::from(base))).unwrap();
+        assert_eq!(config.admin_addr, "127.0.0.1:7253".parse().unwrap());
+
+        let mut env = HashMap::from(base);
+        env.insert("LS3_ADMIN_ADDR", "0.0.0.0:7253");
+        assert!(matches!(
+            Config::load(empty_cli(), &FakeEnv(env)),
+            Err(ConfigError::AdminAddrNotLoopback(_))
+        ));
     }
 
     #[test]

@@ -140,6 +140,9 @@ single `PUT` regardless of size (no chunking) — the server itself does support
 multipart upload (e.g. `rclone copy` of a large file uses it automatically), see
 [api-reference.md](api-reference.md).
 
+Signed in with the root key on the same machine as the server, the **Admin** link opens
+the admin panel: see [admin.md](admin.md).
+
 Production build: `npm run build` (output in `frontend/dist/`, a static site — serve it
 from any static host, pointed at a real `VITE_API_URL`).
 

@@ -1098,6 +1098,23 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "loony-admin"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "loony-auth",
+ "loony-core",
+ "loony-metadata",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "loony-admin-cli"
@@ -1278,6 +1295,7 @@ dependencies = [
  "axum",
  "clap",
  "dotenvy",
+ "loony-admin",
  "loony-api",
  "loony-cluster",
  "loony-core",
