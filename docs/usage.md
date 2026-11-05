@@ -38,14 +38,14 @@ On first start, the server:
   them, otherwise a credential deterministically derived from the node's identity, which
   the server prints to its log loudly labeled as dev-only. Anything beyond local
   experimentation should set those two variables explicitly.
-- starts serving the LS3 API on `LS3_BIND_ADDR` (default `0.0.0.0:9000`)
+- starts serving the LS3 API on `LS3_BIND_ADDR` (default `0.0.0.0:7353`)
 
 ```
 server: using a dev-default root credential (set LS3_ROOT_ACCESS_KEY / LS3_ROOT_SECRET_KEY
 for anything beyond local testing):
   access key: AKIADEV...
   secret key: 6f2c9a...
-server: LS3 API listening on http://0.0.0.0:9000
+server: LS3 API listening on http://0.0.0.0:7353
 ```
 
 Stop it with Ctrl-C; it drains in-flight requests before exiting. Restarting with the
@@ -65,7 +65,7 @@ if one is missing; variables already set in your shell take precedence over the 
 
 ```bash
 cp scripts/.env.example scripts/.env      # then fill in ACCESS_KEY, SECRET_KEY, CLUSTER_TOKEN
-scripts/start-standalone.sh               # builds + starts one node on 127.0.0.1:9000
+scripts/start-standalone.sh               # builds + starts one node on 127.0.0.1:7353
 source /tmp/loony-standalone-run/env      # ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY + rclone remote
 scripts/curl-demo.sh                      # create bucket -> put -> head -> get -> list -> delete
 scripts/stop-standalone.sh
@@ -97,7 +97,7 @@ rclone rmdir     loony:my-bucket
 
 To configure it by hand against another server instead, set the same variables:
 `RCLONE_CONFIG_LOONY_TYPE=s3`, `..._PROVIDER=Other`, `..._LIST_VERSION=2`,
-`..._ENDPOINT=http://host:9000`, `..._REGION` (must match `LS3_REGION`),
+`..._ENDPOINT=http://host:7353`, `..._REGION` (must match `LS3_REGION`),
 `..._ACCESS_KEY_ID`, `..._SECRET_ACCESS_KEY`.
 
 For large downloads add `--multi-thread-streams 0`: rclone otherwise fetches big files
@@ -125,7 +125,7 @@ cd frontend
 npm install
 cp .env.example .env.local
 # edit .env.local: VITE_API_URL must point at the running server's LS3 API
-#   (e.g. http://127.0.0.1:9000), VITE_REGION must match LS3_REGION
+#   (e.g. http://127.0.0.1:7353), VITE_REGION must match LS3_REGION
 npm run dev
 # open http://localhost:5173
 ```

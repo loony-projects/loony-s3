@@ -15,7 +15,7 @@ load_dotenv
 require_env ACCESS_KEY SECRET_KEY
 
 DATA_DIR="${DATA_DIR:-/tmp/loony-standalone}"
-BIND_ADDR="${BIND_ADDR:-127.0.0.1:9000}"
+BIND_ADDR="${BIND_ADDR:-127.0.0.1:7353}"
 REGION="${REGION:-us-east-1}"
 
 STATE_DIR="${STATE_DIR:-/tmp/loony-standalone-run}"

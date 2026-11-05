@@ -21,7 +21,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 load_dotenv
 require_env ACCESS_KEY SECRET_KEY
 
-ENDPOINT="${ENDPOINT:-http://127.0.0.1:9000}"
+ENDPOINT="${ENDPOINT:-http://127.0.0.1:7353}"
 REGION="${REGION:-us-east-1}"
 BUCKET="${BUCKET:-curl-demo-bucket}"
 OBJECT_KEY="${OBJECT_KEY:-hello.txt}"

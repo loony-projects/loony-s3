@@ -7,7 +7,7 @@ import { useToast } from '@/context/ToastContext';
 import { Spinner } from '@/components/Spinner';
 import { ApiError } from '@/api/client';
 
-const DEFAULT_ENDPOINT = (import.meta.env['VITE_API_URL'] as string | undefined) || 'http://localhost:9000';
+const DEFAULT_ENDPOINT = (import.meta.env['VITE_API_URL'] as string | undefined) || 'http://localhost:7353';
 const DEFAULT_REGION = (import.meta.env['VITE_REGION'] as string | undefined) || 'us-east-1';
 
 export function LoginPage() {
@@ -105,7 +105,7 @@ export function LoginPage() {
                   type="text"
                   value={endpoint}
                   onChange={(e) => setEndpoint(e.target.value)}
-                  placeholder="http://localhost:9000"
+                  placeholder="http://localhost:7353"
                   required
                   className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
                 />

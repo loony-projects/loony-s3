@@ -62,7 +62,7 @@ declare -a BIND_ADDRS CLUSTER_ADDRS
 
 for i in $(seq 1 "$CLUSTER_SIZE"); do
   idx=$((i - 1))
-  bind_port=$((9000 + idx))
+  bind_port=$((7353 + idx))
   cluster_port=$((9100 + idx))
   bind_addr="127.0.0.1:$bind_port"
   cluster_addr="127.0.0.1:$cluster_port"

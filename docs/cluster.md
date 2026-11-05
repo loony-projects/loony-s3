@@ -13,13 +13,13 @@ Bootstrap the first node, then have others join it. Each node needs its own
 ```bash
 # Node 1: bootstrap a brand-new cluster
 LS3_CLUSTER_TOKEN=shared-secret LS3_MODE=cluster LS3_CLUSTER_ID=my-cluster \
-  LS3_DATA_DIR=/tmp/loony-node1 LS3_BIND_ADDR=127.0.0.1:9000 \
+  LS3_DATA_DIR=/tmp/loony-node1 LS3_BIND_ADDR=127.0.0.1:7353 \
   LS3_CLUSTER_ADDR=127.0.0.1:9100 LS3_ADVERTISE_ADDR=127.0.0.1:9100 \
   cargo run --bin loony-server -- --mode cluster --bootstrap
 
 # Node 2: join through node 1
 LS3_CLUSTER_TOKEN=shared-secret LS3_MODE=cluster \
-  LS3_DATA_DIR=/tmp/loony-node2 LS3_BIND_ADDR=127.0.0.1:9001 \
+  LS3_DATA_DIR=/tmp/loony-node2 LS3_BIND_ADDR=127.0.0.1:7354 \
   LS3_CLUSTER_ADDR=127.0.0.1:9101 LS3_ADVERTISE_ADDR=127.0.0.1:9101 \
   cargo run --bin loony-server -- --mode cluster --join 127.0.0.1:9100
 ```

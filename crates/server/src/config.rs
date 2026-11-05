@@ -116,7 +116,7 @@ impl Config {
             .map(PathBuf::from)
             .ok_or(ConfigError::Missing("LS3_DATA_DIR"))?;
 
-        let bind_addr = parse_addr_or_default(env, "LS3_BIND_ADDR", "0.0.0.0:9000")?;
+        let bind_addr = parse_addr_or_default(env, "LS3_BIND_ADDR", "0.0.0.0:7353")?;
         let admin_addr = parse_addr_or_default(env, "LS3_ADMIN_ADDR", "0.0.0.0:9001")?;
         let region = env
             .get("LS3_REGION")
@@ -223,7 +223,7 @@ mod tests {
 
         assert_eq!(config.mode, Mode::Standalone);
         assert_eq!(config.data_dir, PathBuf::from("/data"));
-        assert_eq!(config.bind_addr, "0.0.0.0:9000".parse().unwrap());
+        assert_eq!(config.bind_addr, "0.0.0.0:7353".parse().unwrap());
         assert!(config.cluster.is_none());
         assert_eq!(
             config.volume_paths,

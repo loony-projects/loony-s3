@@ -11,7 +11,7 @@ it.
 |---|---|---|---|---|
 | `LS3_MODE` | `--mode standalone\|cluster` | — | yes | Selects standalone vs. cluster mode. |
 | `LS3_DATA_DIR` | — | — | yes | Root of this node's persistent state: `NODE_ID`, `meta.redb`, and (unless `LS3_VOLUME_PATHS` is set) `volumes/vol-0`. |
-| `LS3_BIND_ADDR` | — | `0.0.0.0:9000` | no | Where the public LS3 API listens. |
+| `LS3_BIND_ADDR` | — | `0.0.0.0:7353` | no | Where the public LS3 API listens. |
 | `LS3_ADMIN_ADDR` | — | `0.0.0.0:9001` | no | Reserved for an admin API. Parsed and logged at startup but **nothing is bound to it yet** — `loony-admin`/`loony-admin-cli` are stubs. |
 | `LS3_REGION` | — | `us-east-1` | no | SigV4 region scope this server verifies requests against. Clients must match it. |
 | `LS3_VOLUME_PATHS` | — | `<LS3_DATA_DIR>/volumes/vol-0` | no | Comma-separated local volume directories. More volumes → a wider erasure-coding scheme becomes available (see [api-reference.md](api-reference.md)). |
