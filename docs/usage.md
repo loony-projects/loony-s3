@@ -60,7 +60,11 @@ use the bundled scripts and [rclone](https://rclone.org).
 
 ### Bundled scripts
 
+The scripts read their credentials from `scripts/.env` (gitignored) and refuse to start
+if one is missing; variables already set in your shell take precedence over the file.
+
 ```bash
+cp scripts/.env.example scripts/.env      # then fill in ACCESS_KEY, SECRET_KEY, CLUSTER_TOKEN
 scripts/start-standalone.sh               # builds + starts one node on 127.0.0.1:9000
 source /tmp/loony-standalone-run/env      # ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY + rclone remote
 scripts/curl-demo.sh                      # create bucket -> put -> head -> get -> list -> delete

@@ -2,17 +2,21 @@
 # Starts one loony-server in standalone mode as a background process.
 #
 # Usage: scripts/start-standalone.sh
-# Config (env, all optional): DATA_DIR, BIND_ADDR, REGION, ACCESS_KEY, SECRET_KEY
+# Config (scripts/.env or environment -- see scripts/.env.example):
+#   required: ACCESS_KEY, SECRET_KEY
+#   optional: DATA_DIR, BIND_ADDR, REGION
 #
 # State (pidfile/log/env-for-other-scripts) lives under $STATE_DIR, not the repo --
 # see stop-standalone.sh to tear this back down, and curl-demo.sh to talk to it.
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+load_dotenv
+require_env ACCESS_KEY SECRET_KEY
+
 DATA_DIR="${DATA_DIR:-/tmp/loony-standalone}"
 BIND_ADDR="${BIND_ADDR:-127.0.0.1:9000}"
 REGION="${REGION:-us-east-1}"
-ACCESS_KEY="${ACCESS_KEY:-devkey}"
-SECRET_KEY="${SECRET_KEY:-devsecret1234}"
 
 STATE_DIR="${STATE_DIR:-/tmp/loony-standalone-run}"
 PID_FILE="$STATE_DIR/loony-server.pid"
@@ -52,25 +56,11 @@ if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   exit 1
 fi
 
-cat >"$ENV_FILE" <<EOF
-export ENDPOINT="http://$BIND_ADDR"
-export REGION="$REGION"
-export ACCESS_KEY="$ACCESS_KEY"
-export SECRET_KEY="$SECRET_KEY"
-# rclone remote "loony:" -- configured entirely from env, no rclone.conf needed.
-export RCLONE_CONFIG_LOONY_TYPE=s3
-export RCLONE_CONFIG_LOONY_PROVIDER=Other
-export RCLONE_CONFIG_LOONY_LIST_VERSION=2
-export RCLONE_CONFIG_LOONY_ENDPOINT="http://$BIND_ADDR"
-export RCLONE_CONFIG_LOONY_REGION="$REGION"
-export RCLONE_CONFIG_LOONY_ACCESS_KEY_ID="$ACCESS_KEY"
-export RCLONE_CONFIG_LOONY_SECRET_ACCESS_KEY="$SECRET_KEY"
-EOF
+write_client_env "$ENV_FILE" "http://$BIND_ADDR"
 
 echo "started (pid $(cat "$PID_FILE"))"
 echo "  endpoint:    http://$BIND_ADDR"
 echo "  access key:  $ACCESS_KEY"
-echo "  secret key:  $SECRET_KEY"
 echo "  log:         $LOG_FILE"
 echo
 echo "curl demo: source $ENV_FILE && scripts/curl-demo.sh"

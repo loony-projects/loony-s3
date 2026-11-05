@@ -12,13 +12,17 @@
 #   source /tmp/loony-standalone-run/env   # sets ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY
 #   scripts/curl-demo.sh
 #
-# Config (env, all optional): ENDPOINT, REGION, ACCESS_KEY, SECRET_KEY, BUCKET, OBJECT_KEY
+# Config (scripts/.env or environment -- see scripts/.env.example):
+#   required: ACCESS_KEY, SECRET_KEY
+#   optional: ENDPOINT, REGION, BUCKET, OBJECT_KEY
 set -euo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+load_dotenv
+require_env ACCESS_KEY SECRET_KEY
 
 ENDPOINT="${ENDPOINT:-http://127.0.0.1:9000}"
 REGION="${REGION:-us-east-1}"
-ACCESS_KEY="${ACCESS_KEY:-devkey}"
-SECRET_KEY="${SECRET_KEY:-devsecret1234}"
 BUCKET="${BUCKET:-curl-demo-bucket}"
 OBJECT_KEY="${OBJECT_KEY:-hello.txt}"
 

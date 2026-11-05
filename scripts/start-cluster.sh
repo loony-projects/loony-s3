@@ -4,17 +4,19 @@
 # doesn't mean yet (no voter promotion/HA failover; a non-leader node can't take writes).
 #
 # Usage: scripts/start-cluster.sh
-# Config (env, all optional): CLUSTER_SIZE (default 3), DATA_ROOT, REGION,
-#   CLUSTER_ID, CLUSTER_TOKEN, ACCESS_KEY, SECRET_KEY
+# Config (scripts/.env or environment -- see scripts/.env.example):
+#   required: ACCESS_KEY, SECRET_KEY, CLUSTER_TOKEN
+#   optional: CLUSTER_SIZE (default 3), DATA_ROOT, REGION, CLUSTER_ID
 set -euo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+load_dotenv
+require_env ACCESS_KEY SECRET_KEY CLUSTER_TOKEN
 
 CLUSTER_SIZE="${CLUSTER_SIZE:-3}"
 DATA_ROOT="${DATA_ROOT:-/tmp/loony-cluster}"
 REGION="${REGION:-us-east-1}"
 CLUSTER_ID="${CLUSTER_ID:-devcluster}"
-CLUSTER_TOKEN="${CLUSTER_TOKEN:-devclustertoken}"
-ACCESS_KEY="${ACCESS_KEY:-devkey}"
-SECRET_KEY="${SECRET_KEY:-devsecret1234}"
 
 STATE_DIR="${STATE_DIR:-/tmp/loony-cluster-run}"
 ENV_FILE="$STATE_DIR/env"
@@ -107,20 +109,8 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
   fi
 done
 
-cat >"$ENV_FILE" <<EOF
-export ENDPOINT="http://${BIND_ADDRS[1]}"
-export REGION="$REGION"
-export ACCESS_KEY="$ACCESS_KEY"
-export SECRET_KEY="$SECRET_KEY"
-# rclone remote "loony:" (node 1) -- configured entirely from env, no rclone.conf needed.
-export RCLONE_CONFIG_LOONY_TYPE=s3
-export RCLONE_CONFIG_LOONY_PROVIDER=Other
-export RCLONE_CONFIG_LOONY_LIST_VERSION=2
-export RCLONE_CONFIG_LOONY_ENDPOINT="http://${BIND_ADDRS[1]}"
-export RCLONE_CONFIG_LOONY_REGION="$REGION"
-export RCLONE_CONFIG_LOONY_ACCESS_KEY_ID="$ACCESS_KEY"
-export RCLONE_CONFIG_LOONY_SECRET_ACCESS_KEY="$SECRET_KEY"
-EOF
+# Clients (and the rclone remote) point at node 1.
+write_client_env "$ENV_FILE" "http://${BIND_ADDRS[1]}"
 
 echo
 echo "cluster up: $CLUSTER_SIZE node(s), cluster id '$CLUSTER_ID'"
