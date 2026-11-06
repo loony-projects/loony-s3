@@ -9,6 +9,9 @@ publish.workspace = true
 name = "loony-server"
 path = "src/main.rs"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [dependencies]
 loony-core = { path = "../core" }
 loony-cluster = { path = "../cluster" }

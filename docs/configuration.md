@@ -37,6 +37,11 @@ When it's off, the [console API](api-reference.md#console-api) isn't served at a
 The web UI needs `VITE_OIDC_ISSUER` and `VITE_OIDC_CLIENT_ID` set to match when it's built,
 and `<its address>/callback` in `LS3_OIDC_REDIRECT_URIS`.
 
+| Env var | CLI flag | Default | Required | Notes |
+|---|---|---|---|---|
+| `LS3_UI_DIR` | — | — | no | Serves the built web UI from this directory, for deployments with no other web server. The server refuses to start if it has no `index.html`. |
+| `LS3_UI_ADDR` | — | `127.0.0.1:7354` | no | Where it's served. It needs its own address, because every path on the LS3 API could be a bucket. |
+
 In a cluster, upgrade every node before turning this on: a node running an older version
 can't apply the new user records.
 

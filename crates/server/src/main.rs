@@ -225,6 +225,24 @@ async fn main() -> std::process::ExitCode {
         }
     });
 
+    if let Some(ui) = &config.ui {
+        let ui_router = loony_console::ui_router(&ui.dir);
+        let ui_listener = match tokio::net::TcpListener::bind(ui.addr).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                tracing::error!(%err, addr = %ui.addr, "failed to bind web UI address");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        tracing::info!(addr = %ui.addr, dir = %ui.dir.display(), "web UI listening");
+        eprintln!("server: web UI listening on http://{}", ui.addr);
+        tokio::spawn(async move {
+            if let Err(err) = axum::serve(ui_listener, ui_router).await {
+                tracing::error!(%err, "web UI exited with an error");
+            }
+        });
+    }
+
     let state = AppState {
         buckets: Arc::new(BucketService::new(metadata.clone())),
         objects: Arc::new(ObjectService::new(

@@ -1740,3 +1740,26 @@ async fn an_expired_key_stops_working() {
         (StatusCode::BAD_REQUEST, "ExpiredToken".to_string())
     );
 }
+
+#[tokio::test]
+async fn shared_caches_are_told_not_to_keep_objects() {
+    let app = test_app().await;
+    create_bucket(&app, "cached").await;
+    put_object(&app, "/cached/photo.jpg", b"picture").await;
+
+    for method in ["GET", "HEAD"] {
+        let res = app
+            .router
+            .clone()
+            .oneshot(req(method, "/cached/photo.jpg"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{method}");
+        assert_eq!(res.headers().get(header::CACHE_CONTROL).unwrap(), "private", "{method}");
+    }
+
+    let range = with_header(req("GET", "/cached/photo.jpg"), "range", "bytes=0-1");
+    let res = app.router.clone().oneshot(range).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(res.headers().get(header::CACHE_CONTROL).unwrap(), "private");
+}

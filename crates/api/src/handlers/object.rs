@@ -18,6 +18,11 @@ use crate::payload;
 use crate::state::AppState;
 use crate::xml;
 
+/// Keeps shared caches such as a CDN from storing objects. One would otherwise go on serving
+/// a presigned link after it expires, or a file after it's deleted. A person's own browser
+/// may still cache what it was allowed to fetch, which is what makes video seeking cheap.
+const OBJECT_CACHE_CONTROL: &str = "private";
+
 /// Body-size cap for a `CompleteMultipartUpload` request: the part list is the only
 /// thing in it, and even the upstream protocol's maximum of 10,000 parts comfortably fits in a
 /// fraction of this (each `<Part>` element is well under 100 bytes).
@@ -281,6 +286,7 @@ pub async fn get_object(
             StatusCode::OK
         })
         .header(header::CONTENT_TYPE, &manifest.content_type)
+        .header(header::CACHE_CONTROL, OBJECT_CACHE_CONTROL)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ETAG, xml::quoted_etag(&manifest.etag))
         .header(header::LAST_MODIFIED, http_date(manifest.created_at));
@@ -320,6 +326,7 @@ pub async fn head_object(
 
     let common = [
         (header::CONTENT_TYPE, manifest.content_type.clone()),
+        (header::CACHE_CONTROL, OBJECT_CACHE_CONTROL.to_string()),
         (header::ACCEPT_RANGES, "bytes".to_string()),
         (header::ETAG, xml::quoted_etag(&manifest.etag)),
         (header::LAST_MODIFIED, http_date(manifest.created_at)),

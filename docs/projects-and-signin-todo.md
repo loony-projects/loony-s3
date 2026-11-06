@@ -56,8 +56,8 @@ Do this first, because every project's apps depend on it.
 - [ ] Add a Cloudflare cache rule bypassing the cache on `s3.lovegood.in`. Cloudflare turns
       `HEAD` into `GET` for file types it caches, which breaks the signature, and it keeps
       serving presigned links for those types after they expire.
-- [ ] Send `Cache-Control: no-store` on object responses, so an expired link stays dead
-      even without that rule.
+- [x] Send `Cache-Control: private` on object responses, so an expired link stays dead even
+      without that rule. It still lets a person's own browser cache what it fetched.
 - [ ] Rerun the public test after both, including large uploads and parallel downloads.
 - [x] Support `Range` requests, because `aws s3 cp` and boto3's `download_file` downloaded
       large files corrupted by default. Also handle `If-Match` and `If-Range`.
@@ -222,6 +222,8 @@ These steps change live services, so confirm each one first.
 - [ ] Register LS3 as a confidential client in loony-auth's `loony` organization, with
       `openid`, `profile` and `email` scopes and exact redirect URIs.
 - [ ] Add the client secret to `scripts/.env`.
+- [x] Let `loony-server` serve the built UI on its own address, as this machine has no other
+      web server, and test the production build in a browser.
 - [ ] Host the UI at `s3-console.lovegood.in`, and add the tunnel route and DNS record.
 - [ ] Deploy the new server and confirm the admin API is still local-only.
 - [ ] Run the full flow on the live site with two real accounts: sign up, create a project,

@@ -12,6 +12,7 @@ mod handlers;
 mod oidc;
 mod projects;
 mod rate_limit;
+mod ui;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,6 +30,7 @@ use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
 pub use oidc::OidcClient;
 pub use projects::{MAX_ACCESS_KEYS_PER_PROJECT, MAX_PROJECTS_PER_USER};
+pub use ui::ui_router;
 use rate_limit::RateLimiter;
 
 /// Far more than the sign-in request needs, which is a few short strings.

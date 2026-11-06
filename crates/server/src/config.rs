@@ -87,6 +87,14 @@ pub struct Config {
     pub cluster: Option<ClusterConfig>,
     /// `None` leaves sign-in off, and the console API isn't served at all.
     pub console: Option<ConsoleConfig>,
+    /// `None` leaves the web UI to be served some other way.
+    pub ui: Option<UiConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UiConfig {
+    pub dir: PathBuf,
+    pub addr: SocketAddr,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +199,7 @@ impl Config {
             volume_paths,
             cluster,
             console: load_console_config(env)?,
+            ui: load_ui_config(env)?,
         })
     }
 }
@@ -281,6 +290,26 @@ fn load_console_config(env: &impl EnvSource) -> Result<Option<ConsoleConfig>, Co
         redirect_uris,
         session_ttl: std::time::Duration::from_secs(session_ttl_secs),
         client_ip_header: get("LS3_TRUSTED_IP_HEADER"),
+    }))
+}
+
+fn load_ui_config(env: &impl EnvSource) -> Result<Option<UiConfig>, ConfigError> {
+    let Some(raw) = env.get("LS3_UI_DIR").filter(|dir| !dir.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let dir = PathBuf::from(&raw);
+    // A site that can't serve anything should stop the server now, not show up as a blank
+    // page for whoever visits next.
+    if !dir.join("index.html").is_file() {
+        return Err(ConfigError::Invalid {
+            key: "LS3_UI_DIR",
+            value: raw,
+            reason: "has no index.html: build the web UI first".into(),
+        });
+    }
+    Ok(Some(UiConfig {
+        dir,
+        addr: parse_addr_or_default(env, "LS3_UI_ADDR", "127.0.0.1:7354")?,
     }))
 }
 
@@ -574,5 +603,33 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    #[test]
+    fn the_web_ui_is_only_served_when_asked_and_when_it_exists() {
+        assert!(standalone_with(&[]).unwrap().ui.is_none());
+
+        assert!(matches!(
+            standalone_with(&[("LS3_UI_DIR", "/nonexistent/loony-ui")]),
+            Err(ConfigError::Invalid {
+                key: "LS3_UI_DIR",
+                ..
+            })
+        ));
+
+        let site = tempfile::tempdir().unwrap();
+        std::fs::write(site.path().join("index.html"), "app").unwrap();
+        let path: &'static str =
+            Box::leak(site.path().to_str().unwrap().to_string().into_boxed_str());
+        let ui = standalone_with(&[("LS3_UI_DIR", path)])
+            .unwrap()
+            .ui
+            .unwrap();
+        assert_eq!(ui.addr.to_string(), "127.0.0.1:7354");
+        let ui = standalone_with(&[("LS3_UI_DIR", path), ("LS3_UI_ADDR", "127.0.0.1:9999")])
+            .unwrap()
+            .ui
+            .unwrap();
+        assert_eq!(ui.addr.port(), 9999);
     }
 }
