@@ -551,3 +551,42 @@ async fn sign_in_session_keys_are_left_out_of_the_key_list_but_project_keys_are_
     assert!(!listed.contains("PROJSESSION"));
     assert!(listed.contains("PROJKEY"));
 }
+
+#[tokio::test]
+async fn users_can_be_listed_approved_and_disabled() {
+    let app = App::new().await;
+    let user = app
+        .store
+        .record_user_sign_in(loony_metadata::UserSignIn {
+            issuer: "https://issuer.example".into(),
+            subject: "alice".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: true,
+            name: Some("Alice".into()),
+        })
+        .await
+        .unwrap();
+
+    let (status, list) = app.admin("GET", "/admin/v1/users", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list[0]["email"], "alice@example.com");
+    assert_eq!(list[0]["can_create_projects"], false);
+    assert_eq!(list[0]["enabled"], true);
+
+    let path = format!("/admin/v1/users/{}", user.user_id);
+    let (status, updated) = app.admin("PATCH", &path, Some(json!({"can_create_projects": true}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["can_create_projects"], true);
+    assert_eq!(updated["enabled"], true, "what wasn't mentioned stays the same");
+
+    let (status, updated) = app.admin("PATCH", &path, Some(json!({"enabled": false}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["enabled"], false);
+    assert_eq!(updated["can_create_projects"], true);
+
+    let unknown = format!("/admin/v1/users/{}", loony_core::UserId::new());
+    let (status, _) = app.admin("PATCH", &unknown, Some(json!({"enabled": true}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    assert!(app.audit_contents().contains("user.update"));
+}

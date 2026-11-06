@@ -97,5 +97,7 @@ All routes are under `/admin/v1`. Errors are `{"message": "..."}`.
 | `POST /credentials` | Create a key: `{}` or `{"owner_id": "..."}` |
 | `PATCH /credentials/{key}` | `{"enabled": true\|false}` |
 | `DELETE /credentials/{key}` | Delete a key |
+| `GET /users` | Everyone who has signed in |
+| `PATCH /users/{id}` | `{"enabled": bool, "can_create_projects": bool}`, either or both. Disabling someone ends their browser sessions at once. Their projects' access keys keep working |
 | `POST /projects/adopt-owner` | Turn an owner from before projects existed into a project, with its buckets and keys: `{"owner_id", "name", "user_id"}`. `user_id` becomes its Owner. The root key's owner is refused |
 | `GET /audit?limit=` | Newest entries first, up to 1000 |

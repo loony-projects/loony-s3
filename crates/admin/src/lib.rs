@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::http::{HeaderValue, Method};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use loony_core::NodeId;
 use loony_metadata::RaftMetadataStore;
 use time::OffsetDateTime;
@@ -37,6 +37,8 @@ pub fn build_router(state: AdminState) -> Router {
         .route("/admin/v1/nodes/:node_id/drain", post(handlers::drain_node))
         .route("/admin/v1/nodes/:node_id/resume", post(handlers::resume_node))
         .route("/admin/v1/nodes/:node_id/remove", post(handlers::remove_node))
+        .route("/admin/v1/users", get(handlers::list_users))
+        .route("/admin/v1/users/:user_id", patch(handlers::update_user))
         .route("/admin/v1/projects/adopt-owner", post(handlers::adopt_owner))
         .route("/admin/v1/buckets", get(handlers::list_buckets))
         .route("/admin/v1/buckets/:name/objects", get(handlers::list_objects))

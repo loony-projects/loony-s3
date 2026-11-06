@@ -4,7 +4,9 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use loony_core::{BucketName, NodeId, NodeState, OwnerId, ProjectId, UserId};
-use loony_metadata::{AdoptOwner, Credential, CredentialKind, ListObjectsQuery, MetadataStore};
+use loony_metadata::{
+    AdoptOwner, Credential, CredentialKind, ListObjectsQuery, MetadataStore, User, UserAccess,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -400,6 +402,71 @@ impl From<Credential> for CredentialView {
             created_at: cred.created_at,
         }
     }
+}
+
+#[derive(Serialize)]
+pub struct UserView {
+    id: UserId,
+    email: Option<String>,
+    email_verified: bool,
+    name: Option<String>,
+    enabled: bool,
+    can_create_projects: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    last_sign_in_at: OffsetDateTime,
+}
+
+impl From<User> for UserView {
+    fn from(user: User) -> Self {
+        Self {
+            id: user.user_id,
+            email: user.email,
+            email_verified: user.email_verified,
+            name: user.name,
+            enabled: user.enabled,
+            can_create_projects: user.can_create_projects,
+            created_at: user.created_at,
+            last_sign_in_at: user.last_sign_in_at,
+        }
+    }
+}
+
+pub async fn list_users(State(state): State<AdminState>) -> Result<Json<Vec<UserView>>> {
+    let mut users = state.metadata.list_users().await?;
+    users.sort_by_key(|user| std::cmp::Reverse(user.last_sign_in_at));
+    Ok(Json(users.into_iter().map(Into::into).collect()))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateUserRequest {
+    enabled: Option<bool>,
+    can_create_projects: Option<bool>,
+}
+
+/// Whatever isn't in the request stays as it is.
+pub async fn update_user(
+    State(state): State<AdminState>,
+    Extension(actor): Extension<Actor>,
+    Path(user_id): Path<UserId>,
+    Json(request): Json<UpdateUserRequest>,
+) -> Result<Json<UserView>> {
+    let target = format!("user:{user_id}");
+    let result = async {
+        let user = state
+            .metadata
+            .get_user(user_id)
+            .await?
+            .ok_or_else(|| AdminError::not_found(format!("User {user_id} does not exist")))?;
+        let access = UserAccess {
+            enabled: request.enabled.unwrap_or(user.enabled),
+            can_create_projects: request.can_create_projects.unwrap_or(user.can_create_projects),
+        };
+        Ok(Json(state.metadata.set_user_access(user_id, access).await?.into()))
+    }
+    .await;
+    audited(&state, &actor, "user.update", &target, result).await
 }
 
 #[derive(Deserialize)]
