@@ -60,7 +60,8 @@ export function CredentialsPage() {
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<CreatedCredential | null>(null);
 
-  const owners = [...new Set((data ?? []).map((c) => c.owner_id))];
+  // A project's keys are managed in the project, and the server refuses to add one here.
+  const owners = [...new Set((data ?? []).filter((c) => !c.project_id).map((c) => c.owner_id))];
 
   function remove(cred: AdminCredential) {
     if (confirm(`Delete access key ${cred.access_key}? Anything using it stops working immediately. This can't be undone.`)) {
@@ -96,8 +97,10 @@ export function CredentialsPage() {
                     <div className="flex items-center gap-2">
                       <code className="text-xs text-gray-900">{cred.access_key}</code>
                       {cred.admin && <Badge tone="blue">Admin</Badge>}
+                      {cred.project_id && <Badge tone="gray">Project key</Badge>}
                       {isOwnKey && <Badge tone="gray">You</Badge>}
                     </div>
+                    {cred.name && <div className="text-xs text-gray-500 mt-0.5 break-words">{cred.name}</div>}
                   </td>
                   <td className="px-4 py-3"><ShortId value={cred.owner_id} /></td>
                   <td className="px-4 py-3"><Badge tone={cred.enabled ? 'green' : 'gray'}>{cred.enabled ? 'Enabled' : 'Disabled'}</Badge></td>

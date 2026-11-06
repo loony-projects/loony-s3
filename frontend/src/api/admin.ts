@@ -98,6 +98,8 @@ export interface AdminCredential {
   enabled: boolean;
   admin: boolean;
   created_at: string;
+  project_id: string | null;
+  name: string | null;
 }
 
 export interface CreatedCredential extends AdminCredential {
@@ -115,7 +117,49 @@ export interface AuditEntry {
 
 const seg = encodeURIComponent;
 
+export interface AdminUser {
+  id: string;
+  email: string | null;
+  email_verified: boolean;
+  name: string | null;
+  enabled: boolean;
+  can_create_projects: boolean;
+  created_at: string;
+  last_sign_in_at: string;
+}
+
+export interface AdminProject {
+  id: string;
+  name: string;
+  enabled: boolean;
+  owner_id: string;
+  created_at: string;
+  members: { user_id: string; email: string | null; name: string | null; role: 'owner' | 'member' }[];
+  access_keys: number;
+  buckets: number;
+  objects: number;
+  bytes: number;
+}
+
+export interface AdoptableOwner {
+  owner_id: string;
+  access_keys: number;
+  buckets: number;
+  objects: number;
+  bytes: number;
+}
+
 export const adminApi = {
+  users: () => adminRequest<AdminUser[]>('GET', '/users'),
+  updateUser: (id: string, change: { enabled?: boolean; can_create_projects?: boolean }) =>
+    adminRequest<AdminUser>('PATCH', `/users/${id}`, { json: change }),
+
+  projects: () => adminRequest<AdminProject[]>('GET', '/projects'),
+  setProjectEnabled: (id: string, enabled: boolean) => adminRequest<AdminProject>('PATCH', `/projects/${id}`, { json: { enabled } }),
+  adoptableOwners: () => adminRequest<AdoptableOwner[]>('GET', '/projects/adoptable-owners'),
+  adoptOwner: (ownerId: string, name: string, userId: string) =>
+    adminRequest<{ project_id: string; name: string }>('POST', '/projects/adopt-owner', { json: { owner_id: ownerId, name, user_id: userId } }),
+
   overview: () => adminRequest<Overview>('GET', '/overview'),
 
   nodes: () => adminRequest<AdminNode[]>('GET', '/nodes'),

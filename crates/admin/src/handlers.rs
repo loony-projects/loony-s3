@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use loony_core::{BucketName, NodeId, NodeState, OwnerId, ProjectId, UserId};
 use loony_metadata::{
-    AdoptOwner, Credential, CredentialKind, ListObjectsQuery, MetadataStore, User, UserAccess,
+    AdoptOwner, Credential, CredentialKind, ListObjectsQuery, MetadataStore, Project, ProjectRole,
+    User, UserAccess,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -388,6 +389,8 @@ pub struct CredentialView {
     owner_id: OwnerId,
     enabled: bool,
     admin: bool,
+    project_id: Option<ProjectId>,
+    name: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
 }
@@ -399,6 +402,8 @@ impl From<Credential> for CredentialView {
             owner_id: cred.owner_id,
             enabled: cred.enabled,
             admin: cred.admin,
+            project_id: cred.project_id,
+            name: cred.name,
             created_at: cred.created_at,
         }
     }
@@ -467,6 +472,173 @@ pub async fn update_user(
     }
     .await;
     audited(&state, &actor, "user.update", &target, result).await
+}
+
+#[derive(Serialize)]
+pub struct ProjectMemberView {
+    user_id: UserId,
+    email: Option<String>,
+    name: Option<String>,
+    role: ProjectRole,
+}
+
+#[derive(Serialize)]
+pub struct ProjectView {
+    id: ProjectId,
+    name: String,
+    enabled: bool,
+    owner_id: OwnerId,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+    members: Vec<ProjectMemberView>,
+    access_keys: u64,
+    buckets: u64,
+    objects: u64,
+    bytes: u64,
+}
+
+/// How much is stored for each owner, in buckets, objects and bytes.
+async fn usage_by_owner(state: &AdminState) -> Result<HashMap<OwnerId, (u64, u64, u64)>> {
+    let stats = state.metadata.storage_stats().await?;
+    let mut usage: HashMap<OwnerId, (u64, u64, u64)> = HashMap::new();
+    for bucket in state.metadata.list_all_buckets().await? {
+        let bucket_usage = stats.buckets.get(&bucket.bucket_id).copied().unwrap_or_default();
+        let entry = usage.entry(bucket.owner_id).or_default();
+        entry.0 += 1;
+        entry.1 += bucket_usage.object_count;
+        entry.2 += bucket_usage.total_bytes;
+    }
+    Ok(usage)
+}
+
+async fn project_view(
+    state: &AdminState,
+    project: Project,
+    usage: &HashMap<OwnerId, (u64, u64, u64)>,
+    credentials: &[Credential],
+) -> Result<ProjectView> {
+    let mut members = Vec::new();
+    for member in state.metadata.list_members(project.project_id).await? {
+        let user = state.metadata.get_user(member.user_id).await?;
+        members.push(ProjectMemberView {
+            user_id: member.user_id,
+            email: user.as_ref().and_then(|u| u.email.clone()),
+            name: user.and_then(|u| u.name),
+            role: member.role,
+        });
+    }
+    let (buckets, objects, bytes) = usage.get(&project.owner_id).copied().unwrap_or_default();
+    let access_keys = credentials
+        .iter()
+        .filter(|c| {
+            c.kind == CredentialKind::ProjectAccessKey && c.project_id == Some(project.project_id)
+        })
+        .count() as u64;
+    Ok(ProjectView {
+        id: project.project_id,
+        name: project.name,
+        enabled: project.enabled,
+        owner_id: project.owner_id,
+        created_at: project.created_at,
+        members,
+        access_keys,
+        buckets,
+        objects,
+        bytes,
+    })
+}
+
+pub async fn list_projects(State(state): State<AdminState>) -> Result<Json<Vec<ProjectView>>> {
+    let mut projects = state.metadata.list_projects().await?;
+    projects.sort_by_key(|project| std::cmp::Reverse(project.created_at));
+    let usage = usage_by_owner(&state).await?;
+    let credentials = state.metadata.list_credentials().await?;
+    let mut views = Vec::with_capacity(projects.len());
+    for project in projects {
+        views.push(project_view(&state, project, &usage, &credentials).await?);
+    }
+    Ok(Json(views))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateProjectRequest {
+    enabled: bool,
+}
+
+pub async fn update_project(
+    State(state): State<AdminState>,
+    Extension(actor): Extension<Actor>,
+    Path(project_id): Path<ProjectId>,
+    Json(request): Json<UpdateProjectRequest>,
+) -> Result<Json<ProjectView>> {
+    let action = if request.enabled {
+        "project.enable"
+    } else {
+        "project.disable"
+    };
+    let target = format!("project:{project_id}");
+    let result = async {
+        let project = state
+            .metadata
+            .set_project_enabled(project_id, request.enabled)
+            .await?;
+        let usage = usage_by_owner(&state).await?;
+        let credentials = state.metadata.list_credentials().await?;
+        Ok(Json(project_view(&state, project, &usage, &credentials).await?))
+    }
+    .await;
+    audited(&state, &actor, action, &target, result).await
+}
+
+#[derive(Serialize)]
+pub struct AdoptableOwner {
+    owner_id: OwnerId,
+    access_keys: u64,
+    buckets: u64,
+    objects: u64,
+    bytes: u64,
+}
+
+/// Owners from before projects existed. Leaves out anyone holding an admin key, which can't
+/// become a project.
+pub async fn adoptable_owners(State(state): State<AdminState>) -> Result<Json<Vec<AdoptableOwner>>> {
+    let usage = usage_by_owner(&state).await?;
+    let in_project: HashSet<OwnerId> = state
+        .metadata
+        .list_projects()
+        .await?
+        .into_iter()
+        .map(|project| project.owner_id)
+        .collect();
+
+    let mut keys: HashMap<OwnerId, u64> = HashMap::new();
+    let mut admins = HashSet::new();
+    for credential in state.metadata.list_credentials().await? {
+        if credential.kind == CredentialKind::Standard {
+            *keys.entry(credential.owner_id).or_default() += 1;
+            if credential.admin {
+                admins.insert(credential.owner_id);
+            }
+        }
+    }
+
+    let owners: HashSet<OwnerId> = keys.keys().chain(usage.keys()).copied().collect();
+    let mut adoptable: Vec<AdoptableOwner> = owners
+        .into_iter()
+        .filter(|owner| !in_project.contains(owner) && !admins.contains(owner))
+        .map(|owner| {
+            let (buckets, objects, bytes) = usage.get(&owner).copied().unwrap_or_default();
+            AdoptableOwner {
+                owner_id: owner,
+                access_keys: keys.get(&owner).copied().unwrap_or_default(),
+                buckets,
+                objects,
+                bytes,
+            }
+        })
+        .collect();
+    adoptable.sort_by_key(|owner| owner.owner_id);
+    Ok(Json(adoptable))
 }
 
 #[derive(Deserialize)]

@@ -590,3 +590,155 @@ async fn users_can_be_listed_approved_and_disabled() {
 
     assert!(app.audit_contents().contains("user.update"));
 }
+
+#[tokio::test]
+async fn projects_are_listed_with_their_members_and_usage_and_can_be_disabled() {
+    let app = App::new().await;
+    let alice = app
+        .store
+        .record_user_sign_in(loony_metadata::UserSignIn {
+            issuer: "https://issuer.example".into(),
+            subject: "alice".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: true,
+            name: Some("Alice".into()),
+        })
+        .await
+        .unwrap();
+    let project = app
+        .store
+        .create_project(loony_metadata::CreateProject {
+            name: "Website".into(),
+            created_by: alice.user_id,
+            max_created: 5,
+        })
+        .await
+        .unwrap();
+    let node = app.add_peer(NodeState::Healthy).await;
+    app.put_object(project.owner_id, "website-assets", "logo.png", 1000, node).await;
+    app.put_object(project.owner_id, "website-assets", "hero.png", 500, node).await;
+    let key = |access_key: &str, kind| Credential {
+        access_key: access_key.into(),
+        secret_key: "secret".into(),
+        owner_id: project.owner_id,
+        enabled: true,
+        admin: false,
+        kind,
+        user_id: Some(alice.user_id),
+        expires_at: None,
+        project_id: Some(project.project_id),
+        name: Some("App".into()),
+        session_of: None,
+        last_used_at: None,
+        created_at: OffsetDateTime::now_utc(),
+    };
+    use loony_metadata::CredentialKind::{ProjectAccessKey, ProjectSession};
+    app.store.put_project_credential(key("APPKEY", ProjectAccessKey), 10).await.unwrap();
+    app.store.put_project_credential(key("SESSIONKEY", ProjectSession), 10).await.unwrap();
+
+    let (status, list) = app.admin("GET", "/admin/v1/projects", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list[0]["name"], "Website");
+    assert_eq!(list[0]["enabled"], true);
+    assert_eq!(list[0]["members"][0]["email"], "alice@example.com");
+    assert_eq!(list[0]["members"][0]["role"], "owner");
+    assert_eq!(list[0]["access_keys"], 1, "session keys aren't access keys");
+    assert_eq!(list[0]["buckets"], 1);
+    assert_eq!(list[0]["objects"], 2);
+    assert_eq!(list[0]["bytes"], 1500);
+
+    let (_, keys) = app.admin("GET", "/admin/v1/credentials", None).await;
+    let listed = keys.as_array().unwrap().iter().find(|k| k["access_key"] == "APPKEY").unwrap();
+    assert_eq!(listed["name"], "App");
+    assert_eq!(listed["project_id"], project.project_id.to_string());
+
+    let path = format!("/admin/v1/projects/{}", project.project_id);
+    let (status, updated) = app.admin("PATCH", &path, Some(json!({"enabled": false}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["enabled"], false);
+    assert!(app.store.get_credential("SESSIONKEY").await.unwrap().is_none());
+    assert!(app.store.get_credential("APPKEY").await.unwrap().is_some());
+
+    let (status, updated) = app.admin("PATCH", &path, Some(json!({"enabled": true}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["enabled"], true);
+
+    let unknown = format!("/admin/v1/projects/{}", loony_core::ProjectId::new());
+    let (status, _) = app.admin("PATCH", &unknown, Some(json!({"enabled": true}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let audit = app.audit_contents();
+    assert!(audit.contains("project.disable") && audit.contains("project.enable"));
+}
+
+#[tokio::test]
+async fn only_owners_outside_projects_can_be_adopted() {
+    let app = App::new().await;
+    let alice = app
+        .store
+        .record_user_sign_in(loony_metadata::UserSignIn {
+            issuer: "https://issuer.example".into(),
+            subject: "alice".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: true,
+            name: None,
+        })
+        .await
+        .unwrap();
+    let project = app
+        .store
+        .create_project(loony_metadata::CreateProject {
+            name: "Existing".into(),
+            created_by: alice.user_id,
+            max_created: 5,
+        })
+        .await
+        .unwrap();
+
+    let (_, created) = app.admin("POST", "/admin/v1/credentials", Some(json!({}))).await;
+    let old_owner = created["owner_id"].as_str().unwrap().to_string();
+
+    // A sign-in's session key has its own owner, which is nothing to adopt.
+    let session_owner = OwnerId::new();
+    app.store
+        .put_credential(Credential {
+            access_key: "SESSION".into(),
+            secret_key: "secret".into(),
+            owner_id: session_owner,
+            enabled: true,
+            admin: false,
+            kind: loony_metadata::CredentialKind::UserSession,
+            user_id: Some(alice.user_id),
+            expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
+            created_at: OffsetDateTime::now_utc(),
+        })
+        .await
+        .unwrap();
+
+    let (status, owners) = app.admin("GET", "/admin/v1/projects/adoptable-owners", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = owners.as_array().unwrap().iter().map(|o| o["owner_id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&old_owner.as_str()));
+    assert!(!ids.contains(&project.owner_id.to_string().as_str()), "already a project");
+    assert!(!ids.contains(&session_owner.to_string().as_str()), "only a sign-in");
+    let credentials = app.store.list_credentials().await.unwrap();
+    let admin_owner = credentials.iter().find(|c| c.admin).unwrap().owner_id.to_string();
+    assert!(!ids.contains(&admin_owner.as_str()), "holds an admin key");
+    let listed = owners.as_array().unwrap().iter().find(|o| o["owner_id"] == old_owner.as_str()).unwrap();
+    assert_eq!(listed["access_keys"], 1);
+
+    let (status, _) = app
+        .admin(
+            "POST",
+            "/admin/v1/projects/adopt-owner",
+            Some(json!({"owner_id": old_owner, "name": "Moved", "user_id": alice.user_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, owners) = app.admin("GET", "/admin/v1/projects/adoptable-owners", None).await;
+    assert!(!owners.to_string().contains(&old_owner), "it's a project now");
+}

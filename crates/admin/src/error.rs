@@ -34,6 +34,7 @@ impl From<MetaError> for AdminError {
             MetaError::NoSuchBucket(_)
             | MetaError::NoSuchNode(_)
             | MetaError::NoSuchUser(_)
+            | MetaError::NoSuchProject(_)
             | MetaError::NoSuchOwner(_) => StatusCode::NOT_FOUND,
             MetaError::InvalidNodeTransition { .. }
             | MetaError::NodeRemoved(_)

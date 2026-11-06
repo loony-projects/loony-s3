@@ -1,8 +1,8 @@
 # Admin panel and API
 
 The web UI has an **Admin** section, backed by a JSON API built into `loony-server`. It's
-for whoever runs the server: it sees every owner's buckets, manages access keys and
-cluster nodes, and keeps an audit log.
+for whoever runs the server: it sees every owner's buckets, manages users, projects, access
+keys and cluster nodes, and keeps an audit log.
 
 ## Reaching it
 
@@ -45,12 +45,34 @@ are logical object sizes, before redundancy. Computing them scans every object's
 so these pages get slower as the object count grows; they only load when you open or
 refresh them.
 
+**Users**: everyone who has signed in with their Loony account.
+
+| Action | Effect |
+| --- | --- |
+| Approve | Lets them create projects, up to 10. Nobody can until an admin approves them. |
+| Remove approval | Stops them creating more. Projects they already have aren't affected. |
+| Disable | Signs them out at once and stops them signing back in. Their projects keep running, and access keys in those projects keep working, because keys belong to the project. |
+
+Their passwords and account security are managed in loony-auth. Disabling someone there
+doesn't by itself lock them out of LS3, so do it here too.
+
+**Projects**: every project, with its members, access key count and usage. Disabling one stops
+all its access keys at once and ends its members' sessions in it, without deleting anything.
+Members can still see the project but can't change it. Enabling it brings back its access
+keys as they were, and members open it again as normal.
+
+**Move an account into a project** appears here when there are owners from before projects
+existed. Their buckets and keys become the project's, the person you choose becomes its
+Owner, and apps using those keys keep working. That person must have signed in at least once.
+The root key's owner can't be moved, and this can't be undone from the panel.
+
 **All buckets**: every bucket with its owner and usage. Browsing a bucket shows names and
 sizes only: it can't download, change or delete anything, and each look is audited.
 
-**Access keys**: create, disable, enable and delete keys. The short-lived keys behind web
-console sign-ins aren't listed, because they expire on their own. A new key either starts a new
-owner or joins an existing one (keys of the same owner share its buckets). The secret is
+**Access keys**: create, disable, enable and delete keys. Project keys are labelled, and the
+short-lived keys behind web console sign-ins aren't listed, because they expire on their
+own. A new key either starts a new owner or joins an existing one (keys of the same owner
+share its buckets). It can't join a project's owner: those keys are managed in the project. The secret is
 shown once, when the key is created. Two things are refused:
 
 - changing the key you're signed in with, so you can't lock yourself out
@@ -76,8 +98,8 @@ Changes must go through the metadata leader's admin API, which is node 1's in a 
 started by `scripts/start-cluster.sh` (ports go up from 7253, one per node). Other nodes
 answer read requests but refuse changes.
 
-**Audit log**: admin changes, bucket browsing and rejected admin requests, with who, what
-and the outcome. Written to `$LS3_DATA_DIR/audit.jsonl`, one JSON object per line, readable
+**Audit log**: admin changes, project changes made by signed-in users, bucket browsing and
+rejected requests, with who, what and the outcome. Written to `$LS3_DATA_DIR/audit.jsonl`, one JSON object per line, readable
 only by the server's user. It's per node, not replicated, and not rotated. It doesn't cover
 uploads and downloads through the LS3 API, and it records the claimed key on a rejected
 request, which isn't proof of who sent it.
@@ -97,6 +119,9 @@ All routes are under `/admin/v1`. Errors are `{"message": "..."}`.
 | `POST /credentials` | Create a key: `{}` or `{"owner_id": "..."}` |
 | `PATCH /credentials/{key}` | `{"enabled": true\|false}` |
 | `DELETE /credentials/{key}` | Delete a key |
+| `GET /projects` | Every project, with its members, key count and usage |
+| `PATCH /projects/{id}` | `{"enabled": bool}`. Disabling stops all the project's keys at once and ends its members' sessions in it |
+| `GET /projects/adoptable-owners` | Owners from before projects existed |
 | `GET /users` | Everyone who has signed in |
 | `PATCH /users/{id}` | `{"enabled": bool, "can_create_projects": bool}`, either or both. Disabling someone ends their browser sessions at once. Their projects' access keys keep working |
 | `POST /projects/adopt-owner` | Turn an owner from before projects existed into a project, with its buckets and keys: `{"owner_id", "name", "user_id"}`. `user_id` becomes its Owner. The root key's owner is refused |

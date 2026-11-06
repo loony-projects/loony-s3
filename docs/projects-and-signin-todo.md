@@ -199,20 +199,20 @@ Do this first, because every project's apps depend on it.
       project's name.
 - [x] Warn when a share link will stop working because the temporary key expires.
 - [x] Test the full flow in a headless browser, including error states and phone widths.
-- [ ] Check the disabled-project screens in a browser, once Phase 4 can disable a project.
+- [x] Check the disabled-project screens in a browser.
 
 ## Phase 4: Admin panel
 
 - [x] Admin API for users: list them, approve or remove project creation, and disable or
-      enable them. Added early, because nobody could otherwise be approved to test Phase 3.
-- [ ] **Users page:** the same in the admin panel.
-- [ ] **Disable user:** ends their temporary keys immediately and refuses new ones. Project
+      enable them.
+- [x] **Users page:** the same in the admin panel.
+- [x] **Disable user:** ends their temporary keys immediately and refuses new ones. Project
       access keys keep working, because they belong to the project.
-- [ ] **Projects page:** list projects with their members and usage, and disable or enable
+- [x] **Projects page:** list projects with their members and usage, and disable or enable
       a project.
-- [ ] **Disable project:** stops all of its keys immediately.
-- [ ] Add the move-existing-owner action from Phase 2.
-- [ ] Update `docs/admin.md`.
+- [x] **Disable project:** stops all of its keys immediately.
+- [x] Add the move-existing-owner action from Phase 2.
+- [x] Update `docs/admin.md`.
 
 ## Phase 5: Go live
 
