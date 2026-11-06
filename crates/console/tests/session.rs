@@ -982,3 +982,46 @@ async fn both_apis_work_side_by_side_and_keep_their_own_keys() {
     let (_, headers, _) = send(&router, preflight("/_console/v1/me")).await;
     assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
 }
+
+#[tokio::test]
+async fn a_wrong_clock_is_not_reported_as_being_signed_out() {
+    let h = harness().await;
+    let session = h.sign_in().await;
+
+    let amz_date = "20200101T000000Z";
+    let payload_hash = sha256_hex(b"");
+    let headers = vec![
+        ("host".to_string(), "localhost".to_string()),
+        ("x-amz-date".to_string(), amz_date.to_string()),
+        ("x-amz-content-sha256".to_string(), payload_hash.clone()),
+    ];
+    let signed_headers = vec![
+        "host".to_string(),
+        "x-amz-content-sha256".to_string(),
+        "x-amz-date".to_string(),
+    ];
+    let authorization = loony_auth::sign_header_auth(
+        "GET",
+        "/_console/v1/me",
+        "",
+        &headers,
+        &signed_headers,
+        &payload_hash,
+        session["access_key"].as_str().unwrap(),
+        session["secret_key"].as_str().unwrap(),
+        REGION,
+        amz_date,
+    );
+    let mut builder = Request::builder().uri("/_console/v1/me");
+    for (name, value) in &headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    let request = builder
+        .header(header::AUTHORIZATION, authorization)
+        .body(Body::empty())
+        .unwrap();
+
+    let (status, _, body) = send(&h.router, request).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "clock_skew");
+}

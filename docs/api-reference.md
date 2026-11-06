@@ -149,6 +149,7 @@ Other keys are refused here with `wrong_key`.
 | `sign_in_failed` | 401 | The identity provider or its token was refused |
 | `unauthorized` | 401 | The signature is missing or wrong, or the session has ended |
 | `session_expired` | 401 | The session key has expired, so sign in again |
+| `clock_skew` | 401 | The client's clock is more than 15 minutes off |
 | `account_disabled` | 403 | An admin has disabled this user |
 | `wrong_key` | 403 | This key isn't a session key |
 | `not_found` | 404 | It doesn't exist, or you can't see it. These look identical on purpose |

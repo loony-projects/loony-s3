@@ -26,6 +26,8 @@ export function useProject(): ProjectContextValue {
   return value;
 }
 
+const pageShell = 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8';
+
 /** Fetches this project's key for the bucket pages, which sign with it. */
 function BucketArea({ project }: { project: Project }) {
   const projectKey = useConsoleStore((s) => s.projectKey);
@@ -51,9 +53,19 @@ function BucketArea({ project }: { project: Project }) {
   }, [project.id, project.enabled, setProjectKey]);
 
   if (!project.enabled) {
-    return <PageError title="This project is disabled">An administrator has disabled this project, so its buckets and access keys don't work right now.</PageError>;
+    return (
+      <div className={pageShell}>
+        <PageError title="This project is disabled">An administrator has disabled this project, so its buckets and access keys don't work right now.</PageError>
+      </div>
+    );
   }
-  if (error) return <PageError title="Couldn't open this project">{error}</PageError>;
+  if (error) {
+    return (
+      <div className={pageShell}>
+        <PageError title="Couldn't open this project">{error}</PageError>
+      </div>
+    );
+  }
   if (projectKey?.projectId !== project.id) {
     return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   }
@@ -114,11 +126,10 @@ export function ProjectLayout() {
 
   const contextValue = useMemo(() => (project ? { project, reload } : null), [project, reload]);
 
-  const shell = 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8';
   if (error) {
     const missing = error instanceof ApiError && error.status === 404;
     return (
-      <div className={shell}>
+      <div className={pageShell}>
         <PageError title={missing ? "We can't find that project" : "That didn't load"}>
           {missing ? "It doesn't exist, or you don't have access to it." : error instanceof ApiError ? error.message : 'The request failed.'}
         </PageError>
@@ -157,9 +168,9 @@ export function ProjectLayout() {
       <Routes>
         <Route index element={<Navigate to="buckets" replace />} />
         <Route path="buckets/*" element={<BucketArea project={project} />} />
-        <Route path="keys" element={<div className={shell}><AccessKeysPage /></div>} />
-        <Route path="members" element={<div className={shell}><MembersPage /></div>} />
-        <Route path="settings" element={<div className={shell}><SettingsPage /></div>} />
+        <Route path="keys" element={<div className={pageShell}><AccessKeysPage /></div>} />
+        <Route path="members" element={<div className={pageShell}><MembersPage /></div>} />
+        <Route path="settings" element={<div className={pageShell}><SettingsPage /></div>} />
         <Route path="*" element={<Navigate to="buckets" replace />} />
       </Routes>
     </ProjectContext.Provider>

@@ -73,6 +73,16 @@ pub async fn require_session(
             )
             .into_response();
         }
+        // Signing in again wouldn't help, so this mustn't read as being signed out.
+        Err(AuthError::RequestExpired) => {
+            return ConsoleError::new(
+                StatusCode::UNAUTHORIZED,
+                "clock_skew",
+                "Your device's clock is wrong, so the server can't accept its requests. Correct \
+                 the date and time, then reload this page.",
+            )
+            .into_response();
+        }
         Err(_) => return unauthorized("Sign in to continue."),
     };
 
