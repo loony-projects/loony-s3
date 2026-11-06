@@ -32,15 +32,16 @@ pub use state::AppState;
 pub fn build_router(state: AppState) -> Router {
     let request_id_header = HeaderName::from_static("x-amz-request-id");
 
+    let bucket_routes = put(handlers::bucket::create_bucket)
+        .delete(handlers::bucket::delete_bucket)
+        .head(handlers::bucket::head_bucket)
+        .get(handlers::bucket::list_objects_v2);
+
     Router::new()
         .route("/", get(handlers::bucket::list_buckets))
-        .route(
-            "/:bucket",
-            put(handlers::bucket::create_bucket)
-                .delete(handlers::bucket::delete_bucket)
-                .head(handlers::bucket::head_bucket)
-                .get(handlers::bucket::list_objects_v2),
-        )
+        .route("/:bucket", bucket_routes.clone())
+        // Some SDKs address a bucket as `/{bucket}/`, the JavaScript one among them.
+        .route("/:bucket/", bucket_routes)
         .route(
             "/:bucket/*key",
             put(handlers::object::put_object)

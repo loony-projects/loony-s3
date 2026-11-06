@@ -884,3 +884,26 @@ async fn aborting_a_multipart_upload_via_http_discards_it() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn bucket_operations_accept_a_trailing_slash() {
+    let app = test_app().await;
+
+    for (method, uri, expected) in [
+        ("PUT", "/slashed/", StatusCode::OK),
+        ("HEAD", "/slashed/", StatusCode::OK),
+        ("GET", "/slashed/?list-type=2", StatusCode::OK),
+        ("DELETE", "/slashed/", StatusCode::NO_CONTENT),
+    ] {
+        let res = app.router.clone().oneshot(req(method, uri)).await.unwrap();
+        assert_eq!(res.status(), expected, "{method} {uri}");
+    }
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req("HEAD", "/slashed"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
