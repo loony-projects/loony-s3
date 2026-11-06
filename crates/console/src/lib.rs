@@ -296,8 +296,8 @@ mod tests {
         for url in [
             "https://auth.example.com",
             "http://localhost:5173/callback",
-            "http://127.0.0.1:8450",
-            "http://[::1]:8450",
+            "http://127.0.0.1:2001",
+            "http://[::1]:2001",
         ] {
             assert!(is_secure_url(url), "{url}");
         }

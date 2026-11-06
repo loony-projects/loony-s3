@@ -536,13 +536,13 @@ mod tests {
         assert_eq!(console.session_ttl.as_secs(), 8 * 60 * 60);
 
         let mut settings = SIGN_IN.to_vec();
-        settings.push(("LS3_OIDC_INTERNAL_URL", "http://127.0.0.1:8450"));
+        settings.push(("LS3_OIDC_INTERNAL_URL", "http://127.0.0.1:2001"));
         settings.push(("LS3_CONSOLE_SESSION_TTL_SECS", "60"));
         settings.push(("LS3_TRUSTED_IP_HEADER", "CF-Connecting-IP"));
         let console = standalone_with(&settings).unwrap().console.unwrap();
         assert_eq!(
             console.internal_url.as_deref(),
-            Some("http://127.0.0.1:8450")
+            Some("http://127.0.0.1:2001")
         );
         assert_eq!(console.session_ttl.as_secs(), 60);
         assert_eq!(
