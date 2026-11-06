@@ -1,4 +1,6 @@
+import { renewSession } from '@/lib/oidc';
 import { useAuthStore } from '@/store/useAuthStore';
+import { API_ENDPOINT, API_REGION, useConsoleStore } from '@/store/useConsoleStore';
 import { amzDateNow, signHeaderAuth, signPresignedQuery, sha256Hex, EMPTY_BODY_SHA256, buildQueryString, uriEncode } from './sigv4';
 import { parseLs3Error } from './xml';
 
@@ -20,7 +22,15 @@ export interface Credentials {
   endpoint: string;
 }
 
+/** Someone signed in with their account signs with the open project's key, and someone
+ * signed in with an access key signs with that. */
 export function getCredentials(): Credentials {
+  const { session, projectKey } = useConsoleStore.getState();
+  if (session) {
+    if (!projectKey) throw new ApiError(0, 'Open a project first');
+    return { accessKey: projectKey.accessKey, secretKey: projectKey.secretKey, region: API_REGION, endpoint: API_ENDPOINT };
+  }
+
   const { accessKey, secretKey, region, endpoint } = useAuthStore.getState();
   if (!accessKey || !secretKey || !endpoint) {
     throw new ApiError(0, 'Not signed in');
@@ -115,6 +125,7 @@ export async function request(method: string, path: string, opts: SignedRequestO
 
   const body = await res.text().catch(() => '');
   const parsed = parseLs3Error(body);
+  if (parsed?.code === 'ExpiredToken' && useConsoleStore.getState().session) renewSession();
   throw new ApiError(res.status, parsed?.message || res.statusText, parsed?.code);
 }
 

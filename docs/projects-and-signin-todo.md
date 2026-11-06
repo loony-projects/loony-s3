@@ -165,44 +165,47 @@ Do this first, because every project's apps depend on it.
 
 **Sign-in**
 
-- [ ] Add a **Sign in with Loony** button and a **Create account** button, which uses
+- [x] Add a **Sign in with Loony** button and a **Create account** button, which uses
       `prompt=create`.
-- [ ] Add a callback page that checks `state` and calls the sign-in endpoint.
-- [ ] Keep keys for the browser session only, not in `localStorage`.
-- [ ] When a key nears expiry, renew it through the redirect, without interrupting a
+- [x] Add a callback page that checks `state` and calls the sign-in endpoint.
+- [x] Keep keys for the browser session only, not in `localStorage`. The root key's sign-in
+      still is in `localStorage`, as it was.
+- [x] When a key nears expiry, renew it through the redirect, without interrupting a
       running upload.
-- [ ] Renew before starting a big upload.
-- [ ] Sign out through loony-auth's `/oauth/logout`.
-- [ ] Show clear messages for failed sign-ins and disabled accounts.
-- [ ] Keep access key sign-in behind a small link for the root key and admin panel.
+- [x] Renew before starting a big upload.
+- [x] Sign out through loony-auth's `/oauth/logout`.
+- [x] Show clear messages for failed sign-ins and disabled accounts.
+- [x] Keep access key sign-in behind a small link for the root key and admin panel.
 
 **Projects page**
 
-- [ ] Add **My projects** and **Shared with me** sections.
-- [ ] Show pending invites, with accept and decline.
-- [ ] Add a **New project** button, and explain how to get approved if the user can't
+- [x] Add **My projects** and **Shared with me** sections.
+- [x] Show pending invites, with accept and decline.
+- [x] Add a **New project** button, and explain how to get approved if the user can't
       create one.
-- [ ] Add empty states for new users.
+- [x] Add empty states for new users.
 
 **Inside a project**
 
-- [ ] Add a project layout with **Buckets**, **Access keys**, **Members** and **Settings**
+- [x] Add a project layout with **Buckets**, **Access keys**, **Members** and **Settings**
       tabs, and a project switcher.
-- [ ] Reuse the existing bucket and file pages, using the project's temporary key.
-- [ ] Rework routes to `/projects/:id/buckets/:name`.
-- [ ] **Access keys:** create, disable and delete keys, show the secret once, and show
+- [x] Reuse the existing bucket and file pages, using the project's temporary key.
+- [x] Rework routes to `/projects/:id/buckets/:name`.
+- [x] **Access keys:** create, disable and delete keys, show the secret once, and show
       copyable connection details with examples for Python, JavaScript and rclone.
-- [ ] **Members:** list members and invites, invite, change roles and remove. Hide what
+- [x] **Members:** list members and invites, invite, change roles and remove. Hide what
       Members aren't allowed to do.
-- [ ] **Settings:** rename, leave and delete, with a confirmation that asks for the
+- [x] **Settings:** rename, leave and delete, with a confirmation that asks for the
       project's name.
-- [ ] Warn when a share link will stop working because the temporary key expires.
-- [ ] Test the full flow in a headless browser, including error states and phone widths.
+- [x] Warn when a share link will stop working because the temporary key expires.
+- [x] Test the full flow in a headless browser, including error states and phone widths.
+- [ ] Check the disabled-project screens in a browser, once Phase 4 can disable a project.
 
 ## Phase 4: Admin panel
 
-- [ ] **Users page:** list users, approve or remove project creation, and disable or enable
-      users.
+- [x] Admin API for users: list them, approve or remove project creation, and disable or
+      enable them. Added early, because nobody could otherwise be approved to test Phase 3.
+- [ ] **Users page:** the same in the admin panel.
 - [ ] **Disable user:** ends their temporary keys immediately and refuses new ones. Project
       access keys keep working, because they belong to the project.
 - [ ] **Projects page:** list projects with their members and usage, and disable or enable

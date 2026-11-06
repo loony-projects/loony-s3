@@ -9,6 +9,7 @@ import { Spinner } from '@/components/Spinner';
 import { EmptyState } from '@/components/EmptyState';
 
 import { formatDate } from '@/lib/format';
+import { useBucketRoutes } from '@/lib/useBucketRoutes';
 
 type BucketSort = 'name-asc' | 'name-desc' | 'newest' | 'oldest';
 
@@ -33,6 +34,7 @@ export function DashboardPage() {
 
   const sortedBuckets = useMemo(() => [...buckets].sort(bucketComparators[sort]), [buckets, sort]);
   const navigate = useNavigate();
+  const routes = useBucketRoutes();
 
   async function load() {
     try {
@@ -154,7 +156,7 @@ export function DashboardPage() {
               <div className="flex items-center justify-between">
                 <p className="text-xs text-gray-400">Created {formatDate(bucket.creationDate)}</p>
                 <button
-                  onClick={() => navigate(`/buckets/${bucket.name}`)}
+                  onClick={() => navigate(routes.bucket(bucket.name))}
                   className="text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors"
                 >
                   Browse →

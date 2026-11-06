@@ -1,11 +1,13 @@
 import { FormEvent, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Database } from 'lucide-react';
 import { verifyCredentials } from '@/api/auth';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useToast } from '@/context/ToastContext';
 import { Spinner } from '@/components/Spinner';
 import { ApiError } from '@/api/client';
+import { safeReturnTo, signInEnabled, startSignIn } from '@/lib/oidc';
+import { useConsoleStore } from '@/store/useConsoleStore';
 
 const DEFAULT_ENDPOINT = (import.meta.env['VITE_API_URL'] as string | undefined) || 'http://localhost:7353';
 const DEFAULT_REGION = (import.meta.env['VITE_REGION'] as string | undefined) || 'us-east-1';
@@ -19,6 +21,23 @@ export function LoginPage() {
   const { login: storeLogin } = useAuthStore();
   const navigate = useNavigate();
   const toast = useToast();
+  const location = useLocation();
+  const hasSession = useConsoleStore((state) => state.session !== null);
+  const clearSession = useConsoleStore((state) => state.clear);
+  const notice = useConsoleStore((state) => state.notice);
+  const [showKeyForm, setShowKeyForm] = useState(!signInEnabled());
+  const [redirecting, setRedirecting] = useState(false);
+  const returnTo = safeReturnTo((location.state as { from?: string } | null)?.from);
+
+  async function continueWithLoony(createAccount: boolean) {
+    setRedirecting(true);
+    try {
+      await startSignIn({ returnTo, createAccount });
+    } catch {
+      toast.error('Could not start sign-in');
+      setRedirecting(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -27,6 +46,7 @@ export function LoginPage() {
     setLoading(true);
     try {
       await verifyCredentials(accessKey.trim(), secretKey.trim(), region.trim() || 'us-east-1', endpoint.trim().replace(/\/$/, ''));
+      clearSession();
       storeLogin(accessKey.trim(), secretKey.trim(), region.trim() || 'us-east-1', endpoint.trim().replace(/\/$/, ''));
       navigate('/');
     } catch (err) {
@@ -36,6 +56,8 @@ export function LoginPage() {
       setLoading(false);
     }
   }
+
+  if (hasSession) return <Navigate to={returnTo} replace />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -48,6 +70,36 @@ export function LoginPage() {
           <p className="text-sm text-gray-500 mt-1">Object Storage Dashboard</p>
         </div>
 
+        {notice && (
+          <p role="alert" className="mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">{notice}</p>
+        )}
+
+        {signInEnabled() && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-4 space-y-3">
+            <button
+              onClick={() => void continueWithLoony(false)}
+              disabled={redirecting}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              {redirecting && <Spinner size="sm" />}
+              Sign in with Loony
+            </button>
+            <button
+              onClick={() => void continueWithLoony(true)}
+              disabled={redirecting}
+              className="w-full py-2.5 px-4 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              Create account
+            </button>
+            {!showKeyForm && (
+              <button onClick={() => setShowKeyForm(true)} className="w-full pt-1 text-xs text-gray-500 hover:text-gray-700 transition-colors">
+                Sign in with an access key
+              </button>
+            )}
+          </div>
+        )}
+
+        {showKeyForm && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -126,6 +178,7 @@ export function LoginPage() {
             Requests are signed with SigV4 — your secret key never leaves this browser
           </p>
         </div>
+        )}
       </div>
     </div>
   );

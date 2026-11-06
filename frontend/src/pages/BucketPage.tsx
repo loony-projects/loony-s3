@@ -17,8 +17,15 @@ import { ObjectDetailsDrawer } from '@/components/ObjectDetailsDrawer';
 import { ShareLinkModal, type ShareMode } from '@/components/ShareLinkModal';
 import { formatBytes, formatDate, fileExtension } from '@/lib/format';
 import { runPool } from '@/lib/pool';
+import { beginActivity } from '@/lib/activity';
+import { renewSession } from '@/lib/oidc';
+import { useBucketRoutes } from '@/lib/useBucketRoutes';
+import { useConsoleStore } from '@/store/useConsoleStore';
 
 const FILE_CONCURRENCY = 3;
+/** Below this, an upload is unlikely to outlast the session it started in. */
+const BIG_UPLOAD_BYTES = 100 * 1024 * 1024;
+const FRESH_SESSION_FOR_BIG_UPLOADS_MS = 30 * 60 * 1000;
 const SEARCH_DEBOUNCE_MS = 300;
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -123,6 +130,7 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'bas
 export function BucketPage() {
   const { name: bucket = '' } = useParams<{ name: string }>();
   const navigate = useNavigate();
+  const routes = useBucketRoutes();
   const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -256,6 +264,19 @@ export function BucketPage() {
 
   function uploadFiles(files: PendingFile[]) {
     if (files.length === 0) return;
+
+    // A key that expires partway through would fail the upload, and renewing redirects
+    // away, which would lose the selected files. So this has to happen before starting.
+    const expiresAt = useConsoleStore.getState().session?.expiresAt;
+    const totalBytes = files.reduce((sum, f) => sum + f.file.size, 0);
+    if (expiresAt && totalBytes >= BIG_UPLOAD_BYTES && expiresAt - Date.now() < FRESH_SESSION_FOR_BIG_UPLOADS_MS) {
+      const minutes = Math.max(1, Math.round((expiresAt - Date.now()) / 60000));
+      if (confirm(`Your session ends in about ${minutes} min, which may not be enough for this upload. Renew it first? You'll need to select the files again.`)) {
+        if (renewSession()) return;
+      }
+    }
+
+    const endActivity = beginActivity();
     const base = prefix;
     const batch = files.map((f) => ({ ...f, id: nextUploadId.current++ }));
     for (const b of batch) uploadControllers.current.set(b.id, new AbortController());
@@ -299,7 +320,7 @@ export function BucketPage() {
       if (failed > 0) toast.error(`${plural(failed, 'file')} failed to upload`);
       if (cancelled > 0 && succeeded === 0 && failed === 0) toast.info('Upload cancelled');
       await reloadRef.current();
-    });
+    }).finally(endActivity);
   }
 
   function cancelUpload(id: number) {
@@ -409,7 +430,7 @@ export function BucketPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate('/')} title="All buckets" className="text-gray-400 hover:text-gray-600">
+          <button onClick={() => navigate(routes.list)} title="All buckets" className="text-gray-400 hover:text-gray-600">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <Breadcrumb bucket={bucket} prefix={prefix} onNavigate={navigatePrefix} />

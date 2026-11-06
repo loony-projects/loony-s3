@@ -171,6 +171,14 @@ Sign in with the same access key / secret key pair the server printed at startup
 server's URL, and its region. The credentials are kept client-side (in the browser) and
 used to sign every request — nothing is sent to any third party.
 
+To offer **Sign in with Loony** and projects instead, set `VITE_OIDC_ISSUER` and
+`VITE_OIDC_CLIENT_ID` in `.env.local`, and give the server the matching settings: see
+[configuration.md](configuration.md#sign-in-with-loony). `<this site>/callback` must be one
+of its redirect URIs. Signing in with an access key stays available behind a link, for the
+root key and the admin panel. Someone signed in with their account sees their projects, and
+each project's buckets, access keys, members and settings. Their keys are kept for that
+browser tab only.
+
 From there: create a bucket, drag-and-drop files to upload, list/download/delete
 objects, copy a presigned link for a file. The web UI's own uploader always sends a
 single `PUT` regardless of size (no chunking) — the server itself does support

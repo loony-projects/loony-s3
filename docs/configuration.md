@@ -34,6 +34,9 @@ When it's off, the [console API](api-reference.md#console-api) isn't served at a
 | `LS3_CONSOLE_SESSION_TTL_SECS` | — | `28800` (8 hours) | no | How long a session key lasts, up to 7 days. |
 | `LS3_TRUSTED_IP_HEADER` | — | — | no | Header holding the real client address, for rate limiting sign-ins, such as `CF-Connecting-IP`. Only set this if all traffic comes through that proxy, because anyone reaching the server directly could fake the header. |
 
+The web UI needs `VITE_OIDC_ISSUER` and `VITE_OIDC_CLIENT_ID` set to match when it's built,
+and `<its address>/callback` in `LS3_OIDC_REDIRECT_URIS`.
+
 In a cluster, upgrade every node before turning this on: a node running an older version
 can't apply the new user records.
 

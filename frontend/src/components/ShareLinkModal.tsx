@@ -3,6 +3,8 @@ import { Copy } from 'lucide-react';
 import { presignObjectUrl } from '@/api/objects';
 import { ApiError } from '@/api/client';
 import { useToast } from '@/context/ToastContext';
+import { formatDate } from '@/lib/format';
+import { useConsoleStore } from '@/store/useConsoleStore';
 import { Modal } from './Modal';
 import { Spinner } from './Spinner';
 
@@ -28,6 +30,10 @@ export function ShareLinkModal({ bucket, initialKey, mode, onClose }: {
   const [generating, setGenerating] = useState(false);
 
   const keyIsValid = key.trim() !== '' && !key.endsWith('/');
+
+  // A link is signed with this session's key, so it can't outlive the session.
+  const sessionEnds = useConsoleStore((s) => s.session?.expiresAt);
+  const endsEarly = sessionEnds !== undefined && Date.now() + expirySecs * 1000 > sessionEnds;
 
   async function generate() {
     setGenerating(true);
@@ -105,6 +111,11 @@ export function ShareLinkModal({ bucket, initialKey, mode, onClose }: {
           >
             {EXPIRY_OPTIONS.map((o) => <option key={o.secs} value={o.secs}>{o.label}</option>)}
           </select>
+          {endsEarly && (
+            <p role="alert" className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              This link will stop working when your session ends, on {formatDate(new Date(sessionEnds).toISOString())}. For a longer-lasting link, generate it with one of the project's access keys.
+            </p>
+          )}
         </div>
 
         {url && (
@@ -123,7 +134,7 @@ export function ShareLinkModal({ bucket, initialKey, mode, onClose }: {
                 <Copy className="w-4 h-4" /> Copy
               </button>
             </div>
-            <p className="text-xs text-gray-400">Valid for {expiryLabel} from now.</p>
+            <p className="text-xs text-gray-400">{endsEarly ? 'Valid until your session ends.' : `Valid for ${expiryLabel} from now.`}</p>
             {mode === 'upload' && (
               <div>
                 <p className="text-xs text-gray-500 mb-1">Upload with curl:</p>
