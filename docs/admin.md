@@ -48,7 +48,8 @@ refresh them.
 **All buckets**: every bucket with its owner and usage. Browsing a bucket shows names and
 sizes only: it can't download, change or delete anything, and each look is audited.
 
-**Access keys**: create, disable, enable and delete keys. A new key either starts a new
+**Access keys**: create, disable, enable and delete keys. The short-lived keys behind web
+console sign-ins aren't listed, because they expire on their own. A new key either starts a new
 owner or joins an existing one (keys of the same owner share its buckets). The secret is
 shown once, when the key is created. Two things are refused:
 

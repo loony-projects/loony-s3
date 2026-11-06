@@ -7,6 +7,7 @@ use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
 
 use clap::Parser;
+use loony_console::{ConsoleConfig, is_secure_url, origin_of};
 use loony_core::NodeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -66,6 +67,12 @@ pub enum ConfigError {
          an SSH tunnel to reach it from another machine)"
     )]
     AdminAddrNotLoopback(SocketAddr),
+
+    #[error(
+        "sign-in needs LS3_OIDC_ISSUER, LS3_OIDC_CLIENT_ID, LS3_OIDC_CLIENT_SECRET and \
+         LS3_OIDC_REDIRECT_URIS together: {0} is missing"
+    )]
+    IncompleteSignInConfig(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +85,8 @@ pub struct Config {
     pub region: String,
     pub volume_paths: Vec<PathBuf>,
     pub cluster: Option<ClusterConfig>,
+    /// `None` leaves sign-in off, and the console API isn't served at all.
+    pub console: Option<ConsoleConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,8 +190,98 @@ impl Config {
             region,
             volume_paths,
             cluster,
+            console: load_console_config(env)?,
         })
     }
+}
+
+const DEFAULT_SESSION_TTL_SECS: u64 = 8 * 60 * 60;
+const MAX_SESSION_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+
+fn load_console_config(env: &impl EnvSource) -> Result<Option<ConsoleConfig>, ConfigError> {
+    let get = |key| {
+        env.get(key)
+            .filter(|value: &String| !value.trim().is_empty())
+    };
+    let issuer = get("LS3_OIDC_ISSUER");
+    let client_id = get("LS3_OIDC_CLIENT_ID");
+    let client_secret = get("LS3_OIDC_CLIENT_SECRET");
+    let redirect_uris = get("LS3_OIDC_REDIRECT_URIS");
+
+    if issuer.is_none() && client_id.is_none() && client_secret.is_none() && redirect_uris.is_none()
+    {
+        return Ok(None);
+    }
+    let issuer = issuer.ok_or(ConfigError::IncompleteSignInConfig("LS3_OIDC_ISSUER"))?;
+    let client_id = client_id.ok_or(ConfigError::IncompleteSignInConfig("LS3_OIDC_CLIENT_ID"))?;
+    let client_secret = client_secret.ok_or(ConfigError::IncompleteSignInConfig(
+        "LS3_OIDC_CLIENT_SECRET",
+    ))?;
+    let redirect_uris = redirect_uris.ok_or(ConfigError::IncompleteSignInConfig(
+        "LS3_OIDC_REDIRECT_URIS",
+    ))?;
+
+    let require_secure = |key: &'static str, url: &str| {
+        if is_secure_url(url) {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid {
+                key,
+                value: url.to_string(),
+                reason: "must be https, or http to this machine".into(),
+            })
+        }
+    };
+    require_secure("LS3_OIDC_ISSUER", &issuer)?;
+    let internal_url = get("LS3_OIDC_INTERNAL_URL");
+    if let Some(url) = &internal_url {
+        require_secure("LS3_OIDC_INTERNAL_URL", url)?;
+    }
+
+    let redirect_uris: Vec<String> = redirect_uris
+        .split(',')
+        .map(|uri| uri.trim().to_string())
+        .filter(|uri| !uri.is_empty())
+        .collect();
+    if redirect_uris.is_empty() {
+        return Err(ConfigError::IncompleteSignInConfig(
+            "LS3_OIDC_REDIRECT_URIS",
+        ));
+    }
+    for uri in &redirect_uris {
+        require_secure("LS3_OIDC_REDIRECT_URIS", uri)?;
+        if origin_of(uri).is_none() {
+            return Err(ConfigError::Invalid {
+                key: "LS3_OIDC_REDIRECT_URIS",
+                value: uri.clone(),
+                reason: "must be an absolute URL".into(),
+            });
+        }
+    }
+
+    let session_ttl_secs = match env.get("LS3_CONSOLE_SESSION_TTL_SECS") {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(secs) if (1..=MAX_SESSION_TTL_SECS).contains(&secs) => secs,
+            _ => {
+                return Err(ConfigError::Invalid {
+                    key: "LS3_CONSOLE_SESSION_TTL_SECS",
+                    value: raw,
+                    reason: format!("must be from 1 to {MAX_SESSION_TTL_SECS}"),
+                });
+            }
+        },
+        None => DEFAULT_SESSION_TTL_SECS,
+    };
+
+    Ok(Some(ConsoleConfig {
+        issuer,
+        internal_url,
+        client_id,
+        client_secret,
+        redirect_uris,
+        session_ttl: std::time::Duration::from_secs(session_ttl_secs),
+        client_ip_header: get("LS3_TRUSTED_IP_HEADER"),
+    }))
 }
 
 fn parse_addr_or_default(
@@ -370,5 +469,110 @@ mod tests {
             config.volume_paths,
             vec![PathBuf::from("/mnt/a"), PathBuf::from("/mnt/b")]
         );
+    }
+
+    fn standalone_with(settings: &[(&'static str, &'static str)]) -> Result<Config, ConfigError> {
+        let mut env = HashMap::from([("LS3_MODE", "standalone"), ("LS3_DATA_DIR", "/tmp/data")]);
+        env.extend(settings.iter().copied());
+        Config::load(empty_cli(), &FakeEnv(env))
+    }
+
+    const SIGN_IN: [(&str, &str); 4] = [
+        ("LS3_OIDC_ISSUER", "https://auth.example.com"),
+        ("LS3_OIDC_CLIENT_ID", "client"),
+        ("LS3_OIDC_CLIENT_SECRET", "secret"),
+        (
+            "LS3_OIDC_REDIRECT_URIS",
+            "https://console.example.com/callback, http://localhost:5173/callback",
+        ),
+    ];
+
+    #[test]
+    fn sign_in_stays_off_unless_configured() {
+        assert!(standalone_with(&[]).unwrap().console.is_none());
+    }
+
+    #[test]
+    fn sign_in_settings_are_read() {
+        let console = standalone_with(&SIGN_IN).unwrap().console.unwrap();
+        assert_eq!(console.issuer, "https://auth.example.com");
+        assert_eq!(console.internal_url, None);
+        assert_eq!(
+            console.redirect_uris,
+            [
+                "https://console.example.com/callback",
+                "http://localhost:5173/callback"
+            ]
+        );
+        assert_eq!(console.session_ttl.as_secs(), 8 * 60 * 60);
+
+        let mut settings = SIGN_IN.to_vec();
+        settings.push(("LS3_OIDC_INTERNAL_URL", "http://127.0.0.1:8450"));
+        settings.push(("LS3_CONSOLE_SESSION_TTL_SECS", "60"));
+        settings.push(("LS3_TRUSTED_IP_HEADER", "CF-Connecting-IP"));
+        let console = standalone_with(&settings).unwrap().console.unwrap();
+        assert_eq!(
+            console.internal_url.as_deref(),
+            Some("http://127.0.0.1:8450")
+        );
+        assert_eq!(console.session_ttl.as_secs(), 60);
+        assert_eq!(
+            console.client_ip_header.as_deref(),
+            Some("CF-Connecting-IP")
+        );
+    }
+
+    #[test]
+    fn part_of_the_sign_in_settings_is_an_error() {
+        for missing in SIGN_IN.map(|(key, _)| key) {
+            let partial: Vec<_> = SIGN_IN
+                .iter()
+                .copied()
+                .filter(|(key, _)| *key != missing)
+                .collect();
+            assert!(
+                matches!(
+                    standalone_with(&partial),
+                    Err(ConfigError::IncompleteSignInConfig(key)) if key == missing
+                ),
+                "without {missing}"
+            );
+        }
+    }
+
+    #[test]
+    fn insecure_sign_in_addresses_are_refused() {
+        for (key, value) in [
+            ("LS3_OIDC_ISSUER", "http://auth.example.com"),
+            (
+                "LS3_OIDC_REDIRECT_URIS",
+                "http://console.example.com/callback",
+            ),
+            ("LS3_OIDC_REDIRECT_URIS", "/callback"),
+            ("LS3_OIDC_INTERNAL_URL", "http://auth.internal"),
+        ] {
+            let mut settings: Vec<_> = SIGN_IN
+                .iter()
+                .copied()
+                .filter(|(existing, _)| *existing != key)
+                .collect();
+            settings.push((key, value));
+            assert!(
+                matches!(standalone_with(&settings), Err(ConfigError::Invalid { .. })),
+                "{key}={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreasonable_session_lifetime_is_refused() {
+        for value in ["0", "-1", "soon", "999999999"] {
+            let mut settings = SIGN_IN.to_vec();
+            settings.push(("LS3_CONSOLE_SESSION_TTL_SECS", value));
+            assert!(
+                matches!(standalone_with(&settings), Err(ConfigError::Invalid { .. })),
+                "{value}"
+            );
+        }
     }
 }

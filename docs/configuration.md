@@ -18,6 +18,25 @@ it.
 | `LS3_NODE_ID` | `--node-id <uuid>` | auto-generated on first start | no | Pins this process to a specific persistent node identity. Must match what's already in `$LS3_DATA_DIR/NODE_ID` if that file exists — the server refuses to start otherwise. |
 | `LS3_ROOT_ACCESS_KEY` + `LS3_ROOT_SECRET_KEY` | — | dev-derived credential | no (but see below) | The root SigV4 credential. Without both set, the server derives a deterministic (and therefore guessable) credential from the node's identity and logs it loudly — fine for local development, not for anything reachable by anyone else. |
 
+## Sign in with Loony
+
+Off unless the first four are set, and the server refuses to start if only some of them are.
+When it's off, the [console API](api-reference.md#console-api) isn't served at all. See
+[loony-auth-signin.md](loony-auth-signin.md) for how it works.
+
+| Env var | CLI flag | Default | Required | Notes |
+|---|---|---|---|---|
+| `LS3_OIDC_ISSUER` | — | — | to enable | The identity provider's public URL, exactly as it appears in its tokens. Must be `https`, or `http` to this machine. |
+| `LS3_OIDC_CLIENT_ID` | — | — | to enable | This server's client ID at the identity provider. |
+| `LS3_OIDC_CLIENT_SECRET` | — | — | to enable | The matching secret. Keep it out of version control. |
+| `LS3_OIDC_REDIRECT_URIS` | — | — | to enable | Comma-separated. Must exactly match what's registered at the identity provider. Their origins are also the only web pages allowed to call the console API. |
+| `LS3_OIDC_INTERNAL_URL` | — | the issuer | no | Where this server reaches the identity provider, if not through its public URL. Useful when both run on one machine. |
+| `LS3_CONSOLE_SESSION_TTL_SECS` | — | `28800` (8 hours) | no | How long a session key lasts, up to 7 days. |
+| `LS3_TRUSTED_IP_HEADER` | — | — | no | Header holding the real client address, for rate limiting sign-ins, such as `CF-Connecting-IP`. Only set this if all traffic comes through that proxy, because anyone reaching the server directly could fake the header. |
+
+In a cluster, upgrade every node before turning this on: a node running an older version
+can't apply the new user records.
+
 ## Cluster mode only
 
 These apply only when `LS3_MODE=cluster`. Standalone mode ignores all of them.

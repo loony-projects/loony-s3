@@ -52,7 +52,13 @@ Do this first, because every project's apps depend on it.
       URLs in boto3.
 - [x] Remove the outdated "There's no API to create additional credentials yet" line from
       `docs/api-reference.md`.
-- [ ] Deploy to the live server, which still runs the old code.
+- [x] Deploy to the live server.
+- [ ] Add a Cloudflare cache rule bypassing the cache on `s3.lovegood.in`. Cloudflare turns
+      `HEAD` into `GET` for file types it caches, which breaks the signature, and it keeps
+      serving presigned links for those types after they expire.
+- [ ] Send `Cache-Control: no-store` on object responses, so an expired link stays dead
+      even without that rule.
+- [ ] Rerun the public test after both, including large uploads and parallel downloads.
 - [x] Support `Range` requests, because `aws s3 cp` and boto3's `download_file` downloaded
       large files corrupted by default. Also handle `If-Match` and `If-Range`.
 
@@ -60,43 +66,44 @@ Do this first, because every project's apps depend on it.
 
 **Credentials**
 
-- [ ] Add an optional expiry to `Credential`, with `#[serde(default)]` so existing records
+- [x] Add an optional expiry to `Credential`, with `#[serde(default)]` so existing records
       still load.
-- [ ] Reject expired keys in both header and presigned verification.
-- [ ] Add a periodic cleanup of expired keys.
-- [ ] Record what each key is for (root, user session, project session or project access
-      key) and who created it.
+- [x] Reject expired keys in both header and presigned verification.
+- [x] Add a periodic cleanup of expired keys.
+- [x] Record what each key is for and who it was issued to. Only standard and user session
+      keys exist so far: Phase 2 adds the project ones.
 
 **Users**
 
-- [ ] Add a user record: `iss` and `sub`, email, email verified, name, status, whether they
+- [x] Add a user record: `iss` and `sub`, email, email verified, name, status, whether they
       may create projects, and timestamps.
-- [ ] Add the Raft commands, snapshot support and tests. Generate IDs and timestamps before
+- [x] Add the Raft commands, snapshot support and tests. Generate IDs and timestamps before
       proposing a command, as `ResolvedCreateBucket` does, so every node stores the same
       values.
 
 **Sign-in endpoint**
 
-- [ ] Add settings for the issuer URL, client ID, client secret and redirect URIs, with the
+- [x] Add settings for the issuer URL, client ID, client secret and redirect URIs, with the
       secret kept in `scripts/.env`.
-- [ ] Add `POST /_console/v1/session`, which takes the code, PKCE verifier, nonce and
+- [x] Add `POST /_console/v1/session`, which takes the code, PKCE verifier, nonce and
       redirect URI.
-- [ ] Only accept redirect URIs from the configured list.
-- [ ] Exchange the code at loony-auth's `/oauth/token`.
-- [ ] Verify the ID token against the JWKS: EdDSA only, plus issuer, audience, expiry and
+- [x] Only accept redirect URIs from the configured list.
+- [x] Exchange the code at loony-auth's `/oauth/token`.
+- [x] Verify the ID token against the JWKS: EdDSA only, plus issuer, audience, expiry and
       nonce.
-- [ ] Cache the JWKS, and refetch it when an unknown `kid` appears.
-- [ ] Create or update the user, refusing disabled users.
-- [ ] Return a user session key, which can call `/_console/v1/*` but owns no buckets.
-- [ ] Add rate limiting, because the endpoint is public.
-- [ ] Add sign-out, which revokes the user's session key.
-- [ ] Authenticate all console endpoints with SigV4 and the existing verifier.
-- [ ] Update CORS so only the configured UI origins can call `/_console/v1/*`.
+- [x] Cache the JWKS, and refetch it when an unknown `kid` appears.
+- [x] Create or update the user, refusing disabled users.
+- [x] Return a user session key, which can call `/_console/v1/*` but owns no buckets.
+- [x] Add rate limiting, because the endpoint is public.
+- [x] Add sign-out, which revokes the user's session key.
+- [x] Authenticate all console endpoints with SigV4 and the existing verifier.
+- [x] Update CORS so only the configured UI origins can call `/_console/v1/*`.
 
 **Tests**
 
-- [ ] Run against a fake identity provider, covering a good sign-in and a bad signature,
+- [x] Run against a fake identity provider, covering a good sign-in and a bad signature,
       wrong issuer, wrong audience, expired token, wrong nonce and reused code.
+- [ ] Sign in against the real loony-auth, which needs a registered client (Phase 5).
 
 ## Phase 2: Projects (server)
 

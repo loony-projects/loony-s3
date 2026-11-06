@@ -9,7 +9,7 @@
   and what genuinely isn't yet.
 - **[admin.md](admin.md)** — the admin panel and API: how to reach them, and what each
   operation does and doesn't do.
-- **[loony-auth-signin.md](loony-auth-signin.md)** — proposal, not built: signing in with
+- **[loony-auth-signin.md](loony-auth-signin.md)** — design, partly built: signing in with
   loony-auth and working in projects.
 - **[projects-and-signin-todo.md](projects-and-signin-todo.md)** — the full task list for
   that work.

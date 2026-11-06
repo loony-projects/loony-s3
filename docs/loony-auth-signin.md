@@ -1,8 +1,10 @@
 # Sign-in with loony-auth (proposal)
 
-**Status: proposed, not built.** Nothing in this document exists in the code yet. For how
-credentials work today, see [api-reference.md](api-reference.md) and [admin.md](admin.md).
-The work is broken down in [projects-and-signin-todo.md](projects-and-signin-todo.md).
+**Status: partly built.** The server side of sign-in exists but is off by default. The web
+UI, projects and project keys don't exist yet, and it hasn't run against the real
+loony-auth. The work is broken down in
+[projects-and-signin-todo.md](projects-and-signin-todo.md). For how credentials work today,
+see [api-reference.md](api-reference.md) and [admin.md](admin.md).
 
 ## Problem
 

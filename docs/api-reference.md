@@ -98,6 +98,37 @@ A failed check fails the upload, and any existing object at that key is left unc
 Shards already written by the failed upload aren't cleaned up yet, the same as for a client
 that disconnects partway through.
 
+## Console API
+
+Behind the web console, and only served when
+[sign-in is configured](configuration.md#sign-in-with-loony). It uses JSON, including for
+errors: `{"code": "...", "message": "..."}`. Only the origins of the configured redirect
+URIs can call it from a browser.
+
+| Operation | Request | Notes |
+|---|---|---|
+| Sign in | `POST /_console/v1/session` | Unsigned. Takes `code`, `code_verifier`, `redirect_uri` and `nonce`, and returns `access_key`, `secret_key`, `expires_at` and `user`. Limited to 30 attempts a minute per client. |
+| Who am I | `GET /_console/v1/me` | Signed with a session key. |
+| Sign out | `DELETE /_console/v1/session` | Signed with a session key. The key stops working at once. |
+
+Signed requests use SigV4 in the `Authorization` header with the real body hash. A
+presigned URL isn't accepted.
+
+A session key is only for this API: the LS3 API refuses it with `AccessDenied`. Other keys
+are refused here with `wrong_key`.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `invalid_request` | 400 | The request is malformed, or the return address isn't configured |
+| `sign_in_failed` | 401 | The identity provider or its token was refused |
+| `unauthorized` | 401 | The signature is missing or wrong, or the session has ended |
+| `session_expired` | 401 | The session key has expired, so sign in again |
+| `account_disabled` | 403 | An admin has disabled this user |
+| `wrong_key` | 403 | This key isn't a session key |
+| `too_many_requests` | 429 | Too many sign-in attempts |
+| `identity_provider_unavailable` | 502 | The identity provider can't be reached |
+| `unavailable` | 503 | This node can't reach the metadata leader |
+
 ## Naming rules
 
 **Bucket names** — enforced exactly, same as the upstream protocol:
@@ -163,6 +194,7 @@ Errors are XML `<Error>` bodies matching the upstream protocol's shape and vocab
 | `InvalidBucketName` | 400 | |
 | `InvalidRange` | 416 | |
 | `PreconditionFailed` | 412 | `If-Match` didn't match the object |
+| `ExpiredToken` | 400 | This key has passed its expiry |
 | `BadDigest` | 400 | The body doesn't match its declared hash or checksum |
 | `IncompleteBody` | 400 | An `aws-chunked` body is malformed, cut short, or the wrong length |
 | `NotImplemented` | 501 | An upload body mode this server doesn't support |

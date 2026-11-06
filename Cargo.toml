@@ -13,6 +13,7 @@ members = [
     "crates/api",
     "crates/healing",
     "crates/admin",
+    "crates/console",
     "crates/admin-cli",
     "crates/observability",
     "crates/server",
@@ -54,6 +55,7 @@ redb = "2"
 md-5 = "0.10"
 base64 = "0.22"
 crc = "3"
+jsonwebtoken = "9"
 sha1 = "0.10"
 reed-solomon-simd = "3"
 reqwest = { version = "0.12", features = ["stream", "json"] }

@@ -232,10 +232,27 @@ async fn main() -> std::process::ExitCode {
             identity.node_id,
             volume_ids,
         )),
-        credentials: metadata,
+        credentials: metadata.clone(),
         region: config.region.clone(),
     };
-    let router = loony_api::build_router(state);
+    let mut router = loony_api::build_router(state);
+
+    if let Some(console_config) = config.console.clone() {
+        let console_state = match loony_console::ConsoleState::new(
+            console_config,
+            metadata.clone(),
+            config.region.clone(),
+        ) {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::error!(%err, "failed to set up sign-in");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        router = router.merge(loony_console::build_router(console_state));
+        tokio::spawn(loony_console::run_cleanup_loop(metadata));
+        tracing::info!("sign-in enabled");
+    }
 
     let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
         Ok(listener) => listener,
@@ -251,8 +268,11 @@ async fn main() -> std::process::ExitCode {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutdown signal received, draining");
     };
-    if let Err(err) = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
+    if let Err(err) = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
         .await
     {
         tracing::error!(%err, "server exited with an error");
