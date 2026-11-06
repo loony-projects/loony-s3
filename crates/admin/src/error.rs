@@ -31,10 +31,14 @@ impl AdminError {
 impl From<MetaError> for AdminError {
     fn from(err: MetaError) -> Self {
         let status = match &err {
-            MetaError::NoSuchBucket(_) | MetaError::NoSuchNode(_) => StatusCode::NOT_FOUND,
-            MetaError::InvalidNodeTransition { .. } | MetaError::NodeRemoved(_) => {
-                StatusCode::CONFLICT
-            }
+            MetaError::NoSuchBucket(_)
+            | MetaError::NoSuchNode(_)
+            | MetaError::NoSuchUser(_)
+            | MetaError::NoSuchOwner(_) => StatusCode::NOT_FOUND,
+            MetaError::InvalidNodeTransition { .. }
+            | MetaError::NodeRemoved(_)
+            | MetaError::OwnerAlreadyInProject(_)
+            | MetaError::OwnerIsAdmin(_) => StatusCode::CONFLICT,
             MetaError::InvalidContinuationToken => StatusCode::BAD_REQUEST,
             MetaError::RaftUnavailable(_) => {
                 return Self::new(

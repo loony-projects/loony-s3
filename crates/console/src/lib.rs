@@ -10,6 +10,7 @@ mod auth;
 mod error;
 mod handlers;
 mod oidc;
+mod projects;
 mod rate_limit;
 
 use std::sync::Arc;
@@ -18,14 +19,16 @@ use std::time::Duration;
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, Uri, header};
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Router, middleware};
+use loony_admin::AuditLog;
 use loony_auth::CredentialProvider;
 use loony_metadata::{MetaError, MetadataStore};
 use time::OffsetDateTime;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
 pub use oidc::OidcClient;
+pub use projects::{MAX_ACCESS_KEYS_PER_PROJECT, MAX_PROJECTS_PER_USER};
 use rate_limit::RateLimiter;
 
 /// Far more than the sign-in request needs, which is a few short strings.
@@ -76,6 +79,7 @@ pub struct ConsoleState {
     pub(crate) session_ttl: time::Duration,
     pub(crate) client_ip_header: Option<String>,
     pub(crate) rate_limiter: Arc<RateLimiter>,
+    pub(crate) audit: Arc<AuditLog>,
 }
 
 impl ConsoleState {
@@ -83,6 +87,7 @@ impl ConsoleState {
         config: ConsoleConfig,
         metadata: Arc<M>,
         region: String,
+        audit: Arc<AuditLog>,
     ) -> Result<Self, reqwest::Error> {
         let session_ttl = time::Duration::try_from(config.session_ttl)
             .expect("the configured session lifetime is validated at startup");
@@ -98,6 +103,7 @@ impl ConsoleState {
                 SIGN_IN_ATTEMPTS_PER_MINUTE,
                 Duration::from_secs(60),
             )),
+            audit,
         })
     }
 
@@ -151,16 +157,68 @@ pub fn build_router(state: ConsoleState) -> Router {
         .filter_map(|origin| origin.parse().ok())
         .collect();
 
-    let signed_in = middleware::from_fn_with_state(state.clone(), auth::require_session);
+    use projects as p;
+    let protected = Router::new()
+        .route("/_console/v1/session", delete(handlers::delete_session))
+        .route("/_console/v1/me", get(handlers::me))
+        .route(
+            "/_console/v1/projects",
+            get(p::list_projects).post(p::create_project),
+        )
+        .route(
+            "/_console/v1/projects/:project",
+            get(p::get_project)
+                .patch(p::rename_project)
+                .delete(p::delete_project),
+        )
+        .route(
+            "/_console/v1/projects/:project/session",
+            post(p::open_project_session),
+        )
+        .route(
+            "/_console/v1/projects/:project/leave",
+            post(p::leave_project),
+        )
+        .route(
+            "/_console/v1/projects/:project/keys",
+            get(p::list_access_keys).post(p::create_access_key),
+        )
+        .route(
+            "/_console/v1/projects/:project/keys/:access_key",
+            patch(p::update_access_key).delete(p::delete_access_key),
+        )
+        .route(
+            "/_console/v1/projects/:project/members",
+            get(p::list_members),
+        )
+        .route(
+            "/_console/v1/projects/:project/members/:user",
+            patch(p::update_member).delete(p::remove_member),
+        )
+        .route(
+            "/_console/v1/projects/:project/invites",
+            get(p::list_invites).post(p::create_invite),
+        )
+        .route(
+            "/_console/v1/projects/:project/invites/:invite",
+            delete(p::cancel_invite),
+        )
+        .route(
+            "/_console/v1/invites/:invite/accept",
+            post(p::accept_invite),
+        )
+        .route(
+            "/_console/v1/invites/:invite/decline",
+            post(p::decline_invite),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_session,
+        ));
 
     Router::new()
-        .route(
-            "/_console/v1/session",
-            post(handlers::create_session).merge(
-                axum::routing::delete(handlers::delete_session).route_layer(signed_in.clone()),
-            ),
-        )
-        .route("/_console/v1/me", get(handlers::me).route_layer(signed_in))
+        .route("/_console/v1/session", post(handlers::create_session))
+        .merge(protected)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::map_response(no_store))
         // Only the console's own pages may call this API. The LS3 API's CORS policy is
@@ -174,8 +232,8 @@ pub fn build_router(state: ConsoleState) -> Router {
         .with_state(state)
 }
 
-/// Deletes temporary keys past their expiry. They already don't work by then: this only
-/// stops them piling up. Reads first so a quiet server writes nothing.
+/// Deletes temporary keys and invites past their expiry. They already don't work by then:
+/// this only stops them piling up. Reads first so a quiet server writes nothing.
 pub async fn delete_expired_credentials(
     metadata: &dyn MetadataStore,
     now: OffsetDateTime,
@@ -184,6 +242,12 @@ pub async fn delete_expired_credentials(
     for credential in metadata.list_credentials().await? {
         if credential.is_expired(now) {
             metadata.delete_credential(&credential.access_key).await?;
+            deleted += 1;
+        }
+    }
+    for invite in metadata.list_invites().await? {
+        if invite.expires_at <= now {
+            metadata.delete_invite(invite.invite_id).await?;
             deleted += 1;
         }
     }
@@ -196,12 +260,12 @@ pub async fn run_cleanup_loop(metadata: Arc<dyn MetadataStore>) {
         interval.tick().await;
         match delete_expired_credentials(metadata.as_ref(), OffsetDateTime::now_utc()).await {
             Ok(0) => {}
-            Ok(deleted) => tracing::info!(deleted, "deleted expired temporary keys"),
+            Ok(deleted) => tracing::info!(deleted, "deleted expired keys and invites"),
             // Only the metadata leader can write, so other nodes end up here.
             Err(MetaError::RaftUnavailable(reason)) => {
                 tracing::debug!(%reason, "left expired keys for the metadata leader");
             }
-            Err(err) => tracing::warn!(%err, "failed to delete expired temporary keys"),
+            Err(err) => tracing::warn!(%err, "failed to delete expired keys and invites"),
         }
     }
 }

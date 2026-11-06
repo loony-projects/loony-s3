@@ -1,6 +1,7 @@
-//! Append-only record of what admins did: every admin write, every browse of a bucket's
-//! contents, and every rejected request. One JSON object per line in this node's data
-//! directory, so it isn't replicated: each node holds the record of its own admin API.
+//! Append-only record of what admins and console users did: every admin write, every browse
+//! of a bucket's contents, every change to a project, and every rejected request. One JSON
+//! object per line in this node's data directory, so it isn't replicated: each node holds
+//! the record of its own APIs.
 //! Never given secrets. LS3 data-plane requests (uploads, downloads) aren't recorded.
 
 use std::io::{Read, Seek, SeekFrom};

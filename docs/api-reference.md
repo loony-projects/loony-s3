@@ -108,14 +108,40 @@ URIs can call it from a browser.
 | Operation | Request | Notes |
 |---|---|---|
 | Sign in | `POST /_console/v1/session` | Unsigned. Takes `code`, `code_verifier`, `redirect_uri` and `nonce`, and returns `access_key`, `secret_key`, `expires_at` and `user`. Limited to 30 attempts a minute per client. |
-| Who am I | `GET /_console/v1/me` | Signed with a session key. |
-| Sign out | `DELETE /_console/v1/session` | Signed with a session key. The key stops working at once. |
+| Who am I | `GET /_console/v1/me` | |
+| Sign out | `DELETE /_console/v1/session` | The key stops working at once, along with the project keys opened from it. |
+| List projects | `GET /_console/v1/projects` | Returns `created`, `joined` and `invites`. |
+| Create a project | `POST /_console/v1/projects` | `{"name"}`. Needs an admin's approval, and one person can create 10. |
+| View a project | `GET /_console/v1/projects/{id}` | |
+| Rename a project | `PATCH /_console/v1/projects/{id}` | `{"name"}`. Owner only. |
+| Delete a project | `DELETE /_console/v1/projects/{id}` | Owner only. Refused while it has buckets. Removes its keys, members and invites. |
+| Open a project | `POST /_console/v1/projects/{id}/session` | Returns a temporary key for the LS3 API, which ends with the sign-in. Opening it again returns the same key. |
+| Leave a project | `POST /_console/v1/projects/{id}/leave` | |
+| List access keys | `GET /_console/v1/projects/{id}/keys` | Without secrets. |
+| Create an access key | `POST /_console/v1/projects/{id}/keys` | `{"name"}`. Only this response has the secret. A project can have 100. |
+| Change an access key | `PATCH /_console/v1/projects/{id}/keys/{key}` | `{"enabled"}`. |
+| Delete an access key | `DELETE /_console/v1/projects/{id}/keys/{key}` | |
+| List members | `GET /_console/v1/projects/{id}/members` | |
+| Change a member's role | `PATCH /_console/v1/projects/{id}/members/{user}` | `{"role": "owner" or "member"}`. Owner only. |
+| Remove a member | `DELETE /_console/v1/projects/{id}/members/{user}` | Owner only. Ends their session keys for this project. |
+| List invites | `GET /_console/v1/projects/{id}/invites` | Owner only. |
+| Invite someone | `POST /_console/v1/projects/{id}/invites` | `{"email", "role"}`. Owner only. Expires after 7 days. No email is sent: it shows up when they sign in. |
+| Cancel an invite | `DELETE /_console/v1/projects/{id}/invites/{invite}` | Owner only. |
+| Accept an invite | `POST /_console/v1/invites/{invite}/accept` | Only for the verified email it was sent to. |
+| Decline an invite | `POST /_console/v1/invites/{invite}/decline` | Only for the verified email it was sent to. |
+
+Everything except signing in is signed with the session key.
+
+A project owns its buckets, and its keys only reach those buckets. Access keys belong to
+the project, so they keep working when the member who created them leaves or is disabled.
+If that person could have kept a copy, replace the key. Disabling a project stops all its
+keys while it's off.
 
 Signed requests use SigV4 in the `Authorization` header with the real body hash. A
 presigned URL isn't accepted.
 
-A session key is only for this API: the LS3 API refuses it with `AccessDenied`. Other keys
-are refused here with `wrong_key`.
+A sign-in's session key is only for this API: the LS3 API refuses it with `AccessDenied`.
+Other keys are refused here with `wrong_key`.
 
 | Code | Status | Meaning |
 |---|---|---|
@@ -125,6 +151,15 @@ are refused here with `wrong_key`.
 | `session_expired` | 401 | The session key has expired, so sign in again |
 | `account_disabled` | 403 | An admin has disabled this user |
 | `wrong_key` | 403 | This key isn't a session key |
+| `not_found` | 404 | It doesn't exist, or you can't see it. These look identical on purpose |
+| `owner_only` | 403 | Only a project Owner can do this |
+| `not_approved` | 403 | An admin hasn't approved this user to create projects |
+| `project_disabled` | 403 | An admin has disabled this project |
+| `email_not_verified` | 403 | Accepting an invite needs a verified email address |
+| `project_not_empty` | 409 | Delete the project's buckets first |
+| `last_owner` | 409 | A project must keep at least one Owner |
+| `project_limit_reached`, `key_limit_reached` | 409 | Over the limit |
+| `invite_exists`, `already_member`, `invite_expired` | 409 | |
 | `too_many_requests` | 429 | Too many sign-in attempts |
 | `identity_provider_unavailable` | 502 | The identity provider can't be reached |
 | `unavailable` | 503 | This node can't reach the metadata leader |

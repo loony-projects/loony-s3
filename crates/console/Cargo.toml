@@ -9,6 +9,7 @@ publish.workspace = true
 loony-core = { path = "../core" }
 loony-metadata = { path = "../metadata" }
 loony-auth = { path = "../auth" }
+loony-admin = { path = "../admin" }
 axum.workspace = true
 http.workspace = true
 tower-http = { workspace = true, features = ["cors"] }

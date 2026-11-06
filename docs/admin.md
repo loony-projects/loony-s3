@@ -97,4 +97,5 @@ All routes are under `/admin/v1`. Errors are `{"message": "..."}`.
 | `POST /credentials` | Create a key: `{}` or `{"owner_id": "..."}` |
 | `PATCH /credentials/{key}` | `{"enabled": true\|false}` |
 | `DELETE /credentials/{key}` | Delete a key |
+| `POST /projects/adopt-owner` | Turn an owner from before projects existed into a project, with its buckets and keys: `{"owner_id", "name", "user_id"}`. `user_id` becomes its Owner. The root key's owner is refused |
 | `GET /audit?limit=` | Newest entries first, up to 1000 |

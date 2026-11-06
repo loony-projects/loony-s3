@@ -198,9 +198,10 @@ async fn main() -> std::process::ExitCode {
         volumes
     };
 
+    let audit = Arc::new(loony_admin::AuditLog::new(config.data_dir.join("audit.jsonl")));
     let admin_router = loony_admin::build_router(loony_admin::AdminState {
         metadata: metadata.clone(),
-        audit: Arc::new(loony_admin::AuditLog::new(config.data_dir.join("audit.jsonl"))),
+        audit: audit.clone(),
         region: config.region.clone(),
         node_id: identity.node_id,
         mode: match config.mode {
@@ -242,6 +243,7 @@ async fn main() -> std::process::ExitCode {
             console_config,
             metadata.clone(),
             config.region.clone(),
+            audit,
         ) {
             Ok(state) => state,
             Err(err) => {

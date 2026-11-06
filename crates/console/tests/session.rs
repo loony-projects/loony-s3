@@ -179,6 +179,7 @@ struct Harness {
     key: SigningKey,
     router: Router,
     metadata: Arc<RedbMetadataStore>,
+    _dir: tempfile::TempDir,
 }
 
 fn config(issuer: &str) -> ConsoleConfig {
@@ -193,10 +194,13 @@ fn config(issuer: &str) -> ConsoleConfig {
     }
 }
 
-async fn open_metadata() -> Arc<RedbMetadataStore> {
-    let dir = tempfile::tempdir().unwrap();
+fn audit(dir: &tempfile::TempDir) -> Arc<loony_admin::AuditLog> {
+    Arc::new(loony_admin::AuditLog::new(dir.path().join("audit.jsonl")))
+}
+
+async fn open_metadata(dir: &tempfile::TempDir) -> Arc<RedbMetadataStore> {
     Arc::new(
-        RedbMetadataStore::open(dir.keep().join("meta.redb"))
+        RedbMetadataStore::open(dir.path().join("meta.redb"))
             .await
             .unwrap(),
     )
@@ -206,13 +210,21 @@ async fn harness() -> Harness {
     let idp = FakeIdp::start().await;
     let key = new_key("key-1");
     idp.publish(&key);
-    let metadata = open_metadata().await;
-    let state = ConsoleState::new(config(&idp.issuer), metadata.clone(), REGION.into()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let metadata = open_metadata(&dir).await;
+    let state = ConsoleState::new(
+        config(&idp.issuer),
+        metadata.clone(),
+        REGION.into(),
+        audit(&dir),
+    )
+    .unwrap();
     Harness {
         idp,
         key,
         router: build_router(state),
         metadata,
+        _dir: dir,
     }
 }
 
@@ -527,9 +539,16 @@ async fn an_unavailable_identity_provider_is_reported_as_such() {
 
 #[tokio::test]
 async fn an_unreachable_identity_provider_is_reported_as_such() {
-    let metadata = open_metadata().await;
+    let dir = tempfile::tempdir().unwrap();
+    let metadata = open_metadata(&dir).await;
     // Nothing listens on this port.
-    let state = ConsoleState::new(config("http://127.0.0.1:1"), metadata, REGION.into()).unwrap();
+    let state = ConsoleState::new(
+        config("http://127.0.0.1:1"),
+        metadata,
+        REGION.into(),
+        audit(&dir),
+    )
+    .unwrap();
     let router = build_router(state);
     let (status, _, body) = send(&router, session_request("code", REDIRECT_URI, NONCE)).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
@@ -760,10 +779,11 @@ async fn a_body_that_does_not_match_its_signature_is_refused() {
 #[tokio::test]
 async fn too_many_attempts_are_slowed_down() {
     let idp = FakeIdp::start().await;
-    let metadata = open_metadata().await;
+    let dir = tempfile::tempdir().unwrap();
+    let metadata = open_metadata(&dir).await;
     let mut settings = config(&idp.issuer);
     settings.client_ip_header = Some("cf-connecting-ip".to_string());
-    let state = ConsoleState::new(settings, metadata, REGION.into())
+    let state = ConsoleState::new(settings, metadata, REGION.into(), audit(&dir))
         .unwrap()
         .with_sign_in_limit(2, Duration::from_secs(60));
     let router = build_router(state);
@@ -835,7 +855,8 @@ async fn only_the_consoles_own_pages_may_call_the_api() {
 
 #[tokio::test]
 async fn cleanup_removes_only_expired_keys() {
-    let metadata = open_metadata().await;
+    let dir = tempfile::tempdir().unwrap();
+    let metadata = open_metadata(&dir).await;
     let now = OffsetDateTime::now_utc();
     let hour = time::Duration::hours(1);
     put_key(
@@ -880,7 +901,7 @@ async fn merged_with_the_ls3_api(h: &Harness, metadata: Arc<RedbMetadataStore>) 
     use loony_core::{NodeId, VolumeId};
     let node_id = NodeId::new();
     let volumes = Arc::new(
-        loony_storage::LocalVolumeManager::open(node_id, vec![tempfile::tempdir().unwrap().keep()])
+        loony_storage::LocalVolumeManager::open(node_id, vec![h._dir.path().join("volumes")])
             .await
             .unwrap(),
     );

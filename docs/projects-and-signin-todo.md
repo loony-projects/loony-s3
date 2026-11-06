@@ -17,8 +17,8 @@ Nothing here is built yet. The sign-in design and its reasoning are in
 - **Projects replace accounts for storage:** a project gets its own `OwnerId`, so
   buckets and keys belong to the project. LS3's existing ownership checks then keep
   projects apart.
-- **Roles:** Owner can do everything. Member can manage buckets and access keys. A
-  read-only role comes later.
+- **Roles:** Owner can do everything. Member can manage buckets and access keys, and see
+  who's in the project. A read-only role comes later.
 - **Creating projects:** only people an admin approves, until storage limits are enforced.
 - **Invites:** per project, by email, and shown inside the UI. LS3 won't send email in the
   first version.
@@ -109,55 +109,57 @@ Do this first, because every project's apps depend on it.
 
 **Projects**
 
-- [ ] Add a project record: ID, name, its `OwnerId`, status, creator and timestamps.
-- [ ] Add a membership record: project, user, role and timestamps.
-- [ ] Add the Raft commands, snapshot support and tests for both.
-- [ ] `GET /_console/v1/projects`: projects I created, projects I've joined, and my
+- [x] Add a project record: ID, name, its `OwnerId`, status, creator and timestamps.
+- [x] Add a membership record: project, user, role and timestamps.
+- [x] Add the Raft commands, snapshot support and tests for both.
+- [x] `GET /_console/v1/projects`: projects I created, projects I've joined, and my
       pending invites.
-- [ ] `POST /_console/v1/projects`: only for approved users, with a per-user project limit.
-- [ ] `GET` and `PATCH /_console/v1/projects/{id}`: view and rename.
-- [ ] `DELETE /_console/v1/projects/{id}`: Owner only, refused while it still has buckets,
+- [x] `POST /_console/v1/projects`: only for approved users, with a limit of 10 projects
+      per person.
+- [x] `GET` and `PATCH /_console/v1/projects/{id}`: view and rename.
+- [x] `DELETE /_console/v1/projects/{id}`: Owner only, refused while it still has buckets,
       and also removes its keys, members and invites.
 
 **Permissions**
 
-- [ ] Check membership and role on every project endpoint.
-- [ ] Return 404, not 403, for projects the user isn't in.
-- [ ] Add a table-driven test of each role against each endpoint.
+- [x] Check membership and role on every project endpoint.
+- [x] Return 404, not 403, for projects the user isn't in.
+- [x] Add a table-driven test of each role against each endpoint.
 
 **Browser access to a project**
 
-- [ ] `POST /_console/v1/projects/{id}/session`: returns a temporary key tied to that
+- [x] `POST /_console/v1/projects/{id}/session`: returns a temporary key tied to that
       project and user, which the UI uses for buckets and files.
-- [ ] Revoke those keys immediately when the user is removed or disabled, or the project
+- [x] Revoke those keys immediately when the user is removed or disabled, or the project
       is disabled or deleted.
 
 **Access keys**
 
-- [ ] List a project's keys, without secrets.
-- [ ] Create a key with a name, showing the secret once.
-- [ ] Enable, disable and delete keys.
-- [ ] Record who created each key and when it was last used, updating last-used no more
+- [x] List a project's keys, without secrets.
+- [x] Create a key with a name, showing the secret once. A project can have 100.
+- [x] Enable, disable and delete keys.
+- [x] Record who created each key and when it was last used, updating last-used no more
       than about once an hour to limit Raft writes.
 
 **Members and invites**
 
-- [ ] Add an invite record: project, email, role, who invited, expiry and status.
-- [ ] Owner can invite by email, list and cancel invites, change roles and remove members.
-- [ ] Any member can leave.
-- [ ] The last Owner can't leave or be demoted.
-- [ ] Accept or decline an invite only if the signed-in email matches and is verified.
-- [ ] Expire invites after 7 days, and refuse duplicates.
+- [x] Add an invite record: project, email, role, who invited, expiry and status. An invite
+      is deleted once answered, so only pending ones are stored.
+- [x] Owner can invite by email, list and cancel invites, change roles and remove members.
+- [x] Any member can leave.
+- [x] The last Owner can't leave or be demoted.
+- [x] Accept or decline an invite only if the signed-in email matches and is verified.
+- [x] Expire invites after 7 days, and refuse duplicates.
 
 **Audit**
 
-- [ ] Log every project, member, invite and access key change, with the user who made it.
-- [ ] Add console actions to the existing audit log, and never log secrets.
+- [x] Log every project, member, invite and access key change, with the user who made it.
+- [x] Add console actions to the existing audit log, and never log secrets.
 
 **Existing data**
 
-- [ ] Add an admin action to move an existing owner's buckets and keys into a project.
-- [ ] Leave the root key's own buckets as they are.
+- [x] Add an admin action to move an existing owner's buckets and keys into a project.
+- [x] Leave the root key's own buckets as they are.
 
 ## Phase 3: Web UI
 

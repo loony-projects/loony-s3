@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, HashSet};
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
-use loony_core::{BucketName, NodeId, NodeState, OwnerId};
-use loony_metadata::{Credential, CredentialKind, ListObjectsQuery, MetadataStore};
+use loony_core::{BucketName, NodeId, NodeState, OwnerId, ProjectId, UserId};
+use loony_metadata::{AdoptOwner, Credential, CredentialKind, ListObjectsQuery, MetadataStore};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -402,6 +402,55 @@ impl From<Credential> for CredentialView {
     }
 }
 
+#[derive(Deserialize)]
+pub struct AdoptOwnerRequest {
+    owner_id: OwnerId,
+    name: String,
+    user_id: UserId,
+}
+
+#[derive(Serialize)]
+pub struct AdoptedProject {
+    project_id: ProjectId,
+    name: String,
+}
+
+/// Turns an owner from before projects existed into a project, with its buckets and keys,
+/// and makes `user_id` its Owner. The root key's owner is refused.
+pub async fn adopt_owner(
+    State(state): State<AdminState>,
+    Extension(actor): Extension<Actor>,
+    Json(request): Json<AdoptOwnerRequest>,
+) -> Result<(StatusCode, Json<AdoptedProject>)> {
+    let target = request.owner_id.to_string();
+    let result = async {
+        let name = request.name.trim();
+        if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+            return Err(AdminError::new(
+                StatusCode::BAD_REQUEST,
+                "A project name must be 1 to 100 characters, without control characters.",
+            ));
+        }
+        let project = state
+            .metadata
+            .adopt_owner(AdoptOwner {
+                owner_id: request.owner_id,
+                name: name.to_string(),
+                user_id: request.user_id,
+            })
+            .await?;
+        Ok((
+            StatusCode::CREATED,
+            Json(AdoptedProject {
+                project_id: project.project_id,
+                name: project.name,
+            }),
+        ))
+    }
+    .await;
+    audited(&state, &actor, "project.adopt_owner", &target, result).await
+}
+
 /// Leaves out the short-lived keys behind web console sign-ins: they come and go on their
 /// own, and an operator has no use for them in a list of keys.
 async fn standard_credentials(state: &AdminState) -> Result<Vec<Credential>> {
@@ -448,6 +497,14 @@ pub async fn create_credential(
                 let has_bucket = !state.metadata.list_buckets(owner_id).await?.is_empty();
                 if !has_key && !has_bucket {
                     return Err(AdminError::not_found(format!("Owner {owner_id} does not exist")));
+                }
+                // A key made here wouldn't belong to the project, so disabling the project
+                // wouldn't stop it.
+                let in_project = state.metadata.list_projects().await?.iter().any(|p| p.owner_id == owner_id);
+                if in_project {
+                    return Err(AdminError::conflict(
+                        "This owner belongs to a project, so its keys are managed there.",
+                    ));
                 }
                 owner_id
             }

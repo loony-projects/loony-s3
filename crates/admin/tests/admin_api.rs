@@ -469,3 +469,85 @@ async fn admins_see_every_owners_buckets_and_each_browse_is_recorded() {
     assert_eq!(audit[1]["target"], "alpha-bucket/docs/");
     assert_eq!(audit[1]["actor"], ADMIN_KEY);
 }
+
+#[tokio::test]
+async fn an_old_owner_can_become_a_project_but_the_root_owner_cannot() {
+    let app = App::new().await;
+    let user = app
+        .store
+        .record_user_sign_in(loony_metadata::UserSignIn {
+            issuer: "https://issuer.example".into(),
+            subject: "alice".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: true,
+            name: None,
+        })
+        .await
+        .unwrap();
+
+    let (status, created) = app.admin("POST", "/admin/v1/credentials", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let owner = created["owner_id"].as_str().unwrap().to_string();
+
+    let adopt = |owner: &str, name: &str| {
+        json!({"owner_id": owner, "name": name, "user_id": user.user_id})
+    };
+    let path = "/admin/v1/projects/adopt-owner";
+
+    let (status, _) = app.admin("POST", path, Some(adopt(&owner, "  "))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, project) = app.admin("POST", path, Some(adopt(&owner, "Imported"))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(project["name"], "Imported");
+
+    let (status, _) = app.admin("POST", path, Some(adopt(&owner, "Again"))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Its keys are managed in the project from now on.
+    let (status, _) = app
+        .admin("POST", "/admin/v1/credentials", Some(json!({"owner_id": owner})))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let keys = app.store.list_credentials().await.unwrap();
+    let root = keys.iter().find(|key| key.admin).unwrap().owner_id.to_string();
+    let (status, _) = app.admin("POST", path, Some(adopt(&root, "Root"))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _) = app.admin("POST", path, Some(adopt(&OwnerId::new().to_string(), "None"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    assert!(app.audit_contents().contains("project.adopt_owner"));
+}
+
+#[tokio::test]
+async fn sign_in_session_keys_are_left_out_of_the_key_list_but_project_keys_are_shown() {
+    let app = App::new().await;
+    let key = |access_key: &str, kind| Credential {
+        access_key: access_key.into(),
+        secret_key: "secret".into(),
+        owner_id: OwnerId::new(),
+        enabled: true,
+        admin: false,
+        kind,
+        user_id: None,
+        expires_at: None,
+        project_id: None,
+        name: None,
+        session_of: None,
+        last_used_at: None,
+        created_at: OffsetDateTime::now_utc(),
+    };
+    use loony_metadata::CredentialKind::{ProjectAccessKey, ProjectSession, UserSession};
+    app.store.put_credential(key("USERSESSION", UserSession)).await.unwrap();
+    app.store.put_credential(key("PROJSESSION", ProjectSession)).await.unwrap();
+    app.store.put_credential(key("PROJKEY", ProjectAccessKey)).await.unwrap();
+
+    let (status, list) = app.admin("GET", "/admin/v1/credentials", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = list.to_string();
+    assert!(!listed.contains("USERSESSION"));
+    assert!(!listed.contains("PROJSESSION"));
+    assert!(listed.contains("PROJKEY"));
+}
