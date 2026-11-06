@@ -11,12 +11,13 @@ use std::io::Cursor;
 
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, PartManifest, UploadId, VersionId, UserId,
+    ObjectManifest, PartManifest, UploadId, VersionId, UserId, InviteId, OwnerId, ProjectId,
 };
 use time::OffsetDateTime;
 
 use crate::commands::{
-    BeginMultipart, CompleteMultipart, CreateBucket, Credential, RegisterNode, User, UserAccess,
+    AdoptOwner, BeginMultipart, CompleteMultipart, CreateBucket, CreateInvite, CreateProject,
+    Credential, Project, ProjectInvite, ProjectMember, ProjectRole, RegisterNode, User, UserAccess,
     UserSignIn,
 };
 use crate::error::MetaError;
@@ -48,6 +49,49 @@ pub struct ResolvedCreateBucket {
 pub struct ResolvedUserSignIn {
     pub sign_in: UserSignIn,
     pub user_id: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedCreateProject {
+    pub cmd: CreateProject,
+    pub project_id: ProjectId,
+    pub owner_id: OwnerId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedAdoptOwner {
+    pub cmd: AdoptOwner,
+    pub project_id: ProjectId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedCreateInvite {
+    pub cmd: CreateInvite,
+    pub invite_id: InviteId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+/// Answering an invite carries the time because whether it has expired must come out the
+/// same on every node.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedInviteAnswer {
+    pub invite_id: InviteId,
+    pub user_id: UserId,
+    pub accept: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedTouchCredential {
+    pub access_key: String,
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
 }
@@ -86,6 +130,20 @@ pub enum MetadataCommand {
     DeleteCredential(String),
     RecordUserSignIn(Box<ResolvedUserSignIn>),
     SetUserAccess(UserId, UserAccess),
+    CreateProject(Box<ResolvedCreateProject>),
+    AdoptOwner(Box<ResolvedAdoptOwner>),
+    RenameProject(ProjectId, String),
+    SetProjectEnabled(ProjectId, bool),
+    DeleteProject(ProjectId),
+    SetMemberRole(ProjectId, UserId, ProjectRole),
+    RemoveMember(ProjectId, UserId),
+    CreateInvite(Box<ResolvedCreateInvite>),
+    DeleteInvite(InviteId),
+    AnswerInvite(Box<ResolvedInviteAnswer>),
+    PutProjectCredential(Box<Credential>, u32),
+    SetCredentialEnabled(String, bool),
+    TouchCredential(Box<ResolvedTouchCredential>),
+    DeleteSession(String),
     BootstrapCluster(ClusterId),
     RegisterNode(RegisterNode),
     UpdateNodeState(NodeId, NodeState),
@@ -102,6 +160,9 @@ pub enum CommandResponse {
     UploadId(UploadId),
     NodeInfo(Box<NodeInfo>),
     User(Box<User>),
+    Project(Box<Project>),
+    Member(Box<ProjectMember>),
+    Invite(Box<ProjectInvite>),
     Unit,
 }
 

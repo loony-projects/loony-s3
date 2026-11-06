@@ -21,10 +21,11 @@ use sha2::Sha256;
 use time::OffsetDateTime;
 
 use crate::commands::{
-    Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
+    Credential, CredentialKind, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
     RegisterNode, StorageStats, User, UserAccess,
 };
 use crate::error::MetaError;
+use crate::raft::projects;
 use crate::raft::types::{
     CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
     ResolvedCreateBucket, ResolvedUserSignIn,
@@ -39,6 +40,12 @@ pub(crate) const USERS: TableDefinition<&str, &[u8]> = TableDefinition::new("use
 /// `issuer\0subject` to the user's id, so a sign-in can find the user it belongs to.
 pub(crate) const USER_SUBJECTS: TableDefinition<&str, &[u8]> =
     TableDefinition::new("user_subjects");
+pub(crate) const PROJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("projects");
+/// Keyed by `project\0user`.
+pub(crate) const PROJECT_MEMBERS: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("project_members");
+pub(crate) const PROJECT_INVITES: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("project_invites");
 pub(crate) const NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("nodes");
 pub(crate) const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
 pub(crate) const CLUSTER_ID_KEY: &str = "cluster_id";
@@ -46,7 +53,19 @@ pub(crate) const CLUSTER_ID_KEY: &str = "cluster_id";
 /// Every business-data table the state machine owns — used to open/create them upfront
 /// and to enumerate them wholesale for snapshotting (`snapshot.rs`).
 pub(crate) const ALL_TABLES: &[TableDefinition<'static, &'static str, &'static [u8]>] =
-    &[BUCKETS, OBJECTS, MULTIPART, CREDENTIALS, USERS, USER_SUBJECTS, NODES, CLUSTER];
+    &[
+    BUCKETS,
+    OBJECTS,
+    MULTIPART,
+    CREDENTIALS,
+    USERS,
+    USER_SUBJECTS,
+    PROJECTS,
+    PROJECT_MEMBERS,
+    PROJECT_INVITES,
+    NODES,
+    CLUSTER,
+];
 
 pub(crate) fn db_err<E: std::fmt::Display>(e: E) -> MetaError {
     MetaError::Db(e.to_string())
@@ -97,6 +116,54 @@ pub(crate) fn apply_metadata_command(
         }
         MetadataCommand::SetUserAccess(user_id, access) => {
             set_user_access(db, user_id, access).map(|u| CommandResponse::User(Box::new(u)))
+        }
+        MetadataCommand::CreateProject(resolved) => projects::create_project(db, *resolved)
+            .map(|p| CommandResponse::Project(Box::new(p))),
+        MetadataCommand::AdoptOwner(resolved) => {
+            projects::adopt_owner(db, *resolved).map(|p| CommandResponse::Project(Box::new(p)))
+        }
+        MetadataCommand::RenameProject(id, name) => {
+            projects::rename_project(db, id, name).map(|p| CommandResponse::Project(Box::new(p)))
+        }
+        MetadataCommand::SetProjectEnabled(id, enabled) => {
+            projects::set_project_enabled(db, id, enabled)
+                .map(|p| CommandResponse::Project(Box::new(p)))
+        }
+        MetadataCommand::DeleteProject(id) => {
+            projects::delete_project(db, id).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::SetMemberRole(project, user, role) => {
+            projects::set_member_role(db, project, user, role)
+                .map(|m| CommandResponse::Member(Box::new(m)))
+        }
+        MetadataCommand::RemoveMember(project, user) => {
+            projects::remove_member(db, project, user).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::CreateInvite(resolved) => {
+            projects::create_invite(db, *resolved).map(|i| CommandResponse::Invite(Box::new(i)))
+        }
+        MetadataCommand::DeleteInvite(id) => {
+            projects::delete_invite(db, id).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::AnswerInvite(resolved) => {
+            projects::answer_invite(db, *resolved).map(|member| match member {
+                Some(member) => CommandResponse::Member(Box::new(member)),
+                None => CommandResponse::Unit,
+            })
+        }
+        MetadataCommand::PutProjectCredential(credential, max_access_keys) => {
+            projects::put_project_credential(db, *credential, max_access_keys)
+                .map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::SetCredentialEnabled(access_key, enabled) => {
+            projects::set_credential_enabled(db, &access_key, enabled)
+                .map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::TouchCredential(resolved) => {
+            projects::touch_credential(db, *resolved).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::DeleteSession(access_key) => {
+            projects::delete_session(db, &access_key).map(|_| CommandResponse::Unit)
         }
         MetadataCommand::BootstrapCluster(id) => bootstrap_cluster(db, id).map(|_| CommandResponse::Unit),
         MetadataCommand::RegisterNode(cmd) => register_node(db, cmd).map(|n| CommandResponse::NodeInfo(Box::new(n))),
@@ -682,6 +749,12 @@ pub(crate) fn set_user_access(
         table.insert(key.as_str(), bytes.as_slice()).map_err(db_err)?;
         user
     };
+    if !access.enabled {
+        let mut credentials = write_txn.open_table(CREDENTIALS).map_err(db_err)?;
+        projects::remove_credentials(&mut credentials, |c| {
+            c.kind == CredentialKind::ProjectSession && c.user_id == Some(user_id)
+        })?;
+    }
     write_txn.commit().map_err(db_err)?;
     Ok(user)
 }

@@ -406,7 +406,7 @@ impl From<Credential> for CredentialView {
 /// own, and an operator has no use for them in a list of keys.
 async fn standard_credentials(state: &AdminState) -> Result<Vec<Credential>> {
     let mut credentials = state.metadata.list_credentials().await?;
-    credentials.retain(|c| c.kind == CredentialKind::Standard);
+    credentials.retain(|c| !c.is_session());
     Ok(credentials)
 }
 
@@ -462,6 +462,10 @@ pub async fn create_credential(
             kind: CredentialKind::Standard,
             user_id: None,
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: OffsetDateTime::now_utc(),
         };
         state.metadata.put_credential(credential.clone()).await?;

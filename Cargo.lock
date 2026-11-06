@@ -1198,6 +1198,7 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1224,6 +1225,7 @@ dependencies = [
  "http",
  "http-body-util",
  "jsonwebtoken",
+ "loony-admin",
  "loony-api",
  "loony-auth",
  "loony-core",

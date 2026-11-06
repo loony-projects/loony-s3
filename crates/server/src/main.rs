@@ -510,6 +510,10 @@ async fn seed_root_credential(
             kind: loony_metadata::CredentialKind::Standard,
             user_id: None,
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await?;

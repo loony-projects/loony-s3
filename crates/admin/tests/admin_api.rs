@@ -65,6 +65,10 @@ impl App {
                     kind: Default::default(),
                     user_id: None,
                     expires_at: None,
+                    project_id: None,
+                    name: None,
+                    session_of: None,
+                    last_used_at: None,
                     created_at: OffsetDateTime::now_utc(),
                 })
                 .await

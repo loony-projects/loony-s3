@@ -657,6 +657,10 @@ async fn put_key(
             kind,
             user_id,
             expires_at,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: OffsetDateTime::now_utc(),
         })
         .await

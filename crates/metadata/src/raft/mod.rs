@@ -10,6 +10,7 @@ mod state_machine;
 mod store;
 #[cfg(test)]
 mod tests;
+pub(crate) mod projects;
 pub(crate) mod types;
 
 pub use network::NoopNetworkFactory;

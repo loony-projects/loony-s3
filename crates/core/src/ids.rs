@@ -113,6 +113,11 @@ define_uuid_id!(
     "Identity of one in-progress multipart upload (architecture.md §27)."
 );
 define_uuid_id!(
+    ProjectId,
+    "A project: buckets, access keys and members grouped together."
+);
+define_uuid_id!(InviteId, "An invitation to join a project.");
+define_uuid_id!(
     UserId,
     "A person who signs in through the identity provider. Separate from [`OwnerId`], \
      which is what owns buckets."

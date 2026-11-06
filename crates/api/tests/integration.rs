@@ -47,6 +47,10 @@ async fn test_app() -> TestApp {
             kind: Default::default(),
             user_id: None,
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await
@@ -334,6 +338,10 @@ async fn a_different_credential_cannot_touch_someone_elses_bucket() {
             kind: Default::default(),
             user_id: None,
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await
@@ -1684,6 +1692,10 @@ async fn a_console_session_key_cannot_use_the_ls3_api() {
             kind: loony_metadata::CredentialKind::UserSession,
             user_id: Some(loony_core::UserId::new()),
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await
@@ -1713,6 +1725,10 @@ async fn an_expired_key_stops_working() {
             kind: Default::default(),
             user_id: None,
             expires_at: Some(now - time::Duration::seconds(1)),
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: now - time::Duration::hours(1),
         })
         .await

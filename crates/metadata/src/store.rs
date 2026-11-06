@@ -6,12 +6,14 @@
 use async_trait::async_trait;
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectKey,
-    ObjectManifest, OwnerId, UploadId, UserId,
+    ObjectManifest, OwnerId, UploadId, UserId, InviteId, ProjectId,
 };
 
 use crate::commands::{
-    BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, PartSummary, RegisterNode, StorageStats, User, UserAccess, UserSignIn,
+    AdoptOwner, BeginMultipart, CompleteMultipart, CreateBucket, CreateInvite, CreateProject,
+    Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, PartSummary, Project,
+    ProjectInvite, ProjectMember, ProjectRole, RegisterNode, StorageStats, User, UserAccess,
+    UserSignIn,
 };
 use crate::error::MetaError;
 use loony_core::PartManifest;
@@ -69,8 +71,89 @@ pub trait MetadataStore: Send + Sync {
     async fn record_user_sign_in(&self, sign_in: UserSignIn) -> Result<User, MetaError>;
     async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError>;
     async fn list_users(&self) -> Result<Vec<User>, MetaError>;
+    /// Disabling a user also ends their project session keys. Project access keys keep
+    /// working, because they belong to the project.
     async fn set_user_access(&self, user_id: UserId, access: UserAccess)
     -> Result<User, MetaError>;
+
+    /// Creates the project with `created_by` as its Owner. Fails with
+    /// [`MetaError::ProjectLimitReached`] past `max_created`.
+    async fn create_project(&self, cmd: CreateProject) -> Result<Project, MetaError>;
+    async fn adopt_owner(&self, cmd: AdoptOwner) -> Result<Project, MetaError>;
+    async fn get_project(&self, project_id: ProjectId) -> Result<Option<Project>, MetaError>;
+    async fn list_projects(&self) -> Result<Vec<Project>, MetaError>;
+    async fn rename_project(&self, project_id: ProjectId, name: String)
+    -> Result<Project, MetaError>;
+    /// Disabling a project stops all its keys at once, and ends its session keys for good.
+    async fn set_project_enabled(
+        &self,
+        project_id: ProjectId,
+        enabled: bool,
+    ) -> Result<Project, MetaError>;
+    /// Removes the project with its keys, members and invites. Fails with
+    /// [`MetaError::ProjectNotEmpty`] while it still has buckets.
+    async fn delete_project(&self, project_id: ProjectId) -> Result<(), MetaError>;
+
+    async fn get_member(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+    ) -> Result<Option<ProjectMember>, MetaError>;
+    async fn list_members(&self, project_id: ProjectId) -> Result<Vec<ProjectMember>, MetaError>;
+    async fn list_user_memberships(&self, user_id: UserId)
+    -> Result<Vec<ProjectMember>, MetaError>;
+    /// Fails with [`MetaError::LastOwner`] rather than leave a project without an Owner.
+    async fn set_member_role(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, MetaError>;
+    /// Also ends their session keys for this project. Fails with [`MetaError::LastOwner`]
+    /// rather than leave a project without an Owner.
+    async fn remove_member(&self, project_id: ProjectId, user_id: UserId) -> Result<(), MetaError>;
+
+    /// Fails with [`MetaError::InviteExists`] or [`MetaError::AlreadyMember`] if there's
+    /// nothing to invite them to.
+    async fn create_invite(&self, cmd: CreateInvite) -> Result<ProjectInvite, MetaError>;
+    async fn get_invite(&self, invite_id: InviteId) -> Result<Option<ProjectInvite>, MetaError>;
+    async fn list_project_invites(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<ProjectInvite>, MetaError>;
+    async fn list_invites(&self) -> Result<Vec<ProjectInvite>, MetaError>;
+    async fn delete_invite(&self, invite_id: InviteId) -> Result<(), MetaError>;
+    /// Only for the user whose verified email the invite was sent to.
+    async fn accept_invite(
+        &self,
+        invite_id: InviteId,
+        user_id: UserId,
+    ) -> Result<ProjectMember, MetaError>;
+    /// Only for the user whose verified email the invite was sent to.
+    async fn decline_invite(&self, invite_id: InviteId, user_id: UserId) -> Result<(), MetaError>;
+
+    /// Stores a key for `credential.project_id`, checking in the same step that the project
+    /// is enabled and, for a session key, that its user is still a member, so a key can't
+    /// slip through just as someone is removed. Fails with [`MetaError::KeyLimitReached`]
+    /// past `max_access_keys`.
+    async fn put_project_credential(
+        &self,
+        credential: Credential,
+        max_access_keys: u32,
+    ) -> Result<(), MetaError>;
+    async fn set_credential_enabled(
+        &self,
+        access_key: &str,
+        enabled: bool,
+    ) -> Result<(), MetaError>;
+    /// Records that a key was just used. Does nothing if it's since been deleted.
+    async fn touch_credential(
+        &self,
+        access_key: &str,
+        at: time::OffsetDateTime,
+    ) -> Result<(), MetaError>;
+    /// Ends a user session and every project session key opened from it.
+    async fn delete_session(&self, access_key: &str) -> Result<(), MetaError>;
 
     /// Sets this store's cluster identity if it doesn't have one yet; idempotent (and
     /// safe to call again with the same id) once it does. Errors with

@@ -16,19 +16,24 @@ use md5::{Digest as _, Md5};
 use redb::{Database, ReadableTable, TableDefinition};
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectId,
-    ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState, UserId,
+    ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState, UserId, InviteId, ProjectId,
 };
 use sha2::Sha256;
 use time::OffsetDateTime;
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode, StorageStats, User, UserAccess,
-    UserSignIn,
+    AdoptOwner, CreateInvite, CreateProject, MultipartUploadState, ObjectSummary, PartSummary,
+    Project, ProjectInvite, ProjectMember, ProjectRole, RegisterNode, StorageStats, User,
+    UserAccess, UserSignIn,
 };
 use crate::error::MetaError;
 use crate::raft::applier;
-use crate::raft::types::ResolvedUserSignIn;
+use crate::raft::projects;
+use crate::raft::types::{
+    ResolvedAdoptOwner, ResolvedCreateInvite, ResolvedCreateProject, ResolvedInviteAnswer,
+    ResolvedTouchCredential, ResolvedUserSignIn,
+};
 use crate::store::MetadataStore;
 
 const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
@@ -72,6 +77,9 @@ impl RedbMetadataStore {
             write_txn.open_table(CREDENTIALS).map_err(db_err)?;
             write_txn.open_table(applier::USERS).map_err(db_err)?;
             write_txn.open_table(applier::USER_SUBJECTS).map_err(db_err)?;
+            write_txn.open_table(applier::PROJECTS).map_err(db_err)?;
+            write_txn.open_table(applier::PROJECT_MEMBERS).map_err(db_err)?;
+            write_txn.open_table(applier::PROJECT_INVITES).map_err(db_err)?;
             write_txn.open_table(NODES).map_err(db_err)?;
             write_txn.open_table(CLUSTER).map_err(db_err)?;
             write_txn.commit().map_err(db_err)?;
@@ -209,6 +217,175 @@ impl MetadataStore for RedbMetadataStore {
         };
         self.blocking(move |db| applier::record_user_sign_in(db, resolved))
             .await
+    }
+
+    async fn create_project(&self, cmd: CreateProject) -> Result<Project, MetaError> {
+        let resolved = ResolvedCreateProject {
+            cmd,
+            project_id: ProjectId::new(),
+            owner_id: OwnerId::new(),
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| projects::create_project(db, resolved)).await
+    }
+
+    async fn adopt_owner(&self, cmd: AdoptOwner) -> Result<Project, MetaError> {
+        let resolved = ResolvedAdoptOwner {
+            cmd,
+            project_id: ProjectId::new(),
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| projects::adopt_owner(db, resolved)).await
+    }
+
+    async fn get_project(&self, project_id: ProjectId) -> Result<Option<Project>, MetaError> {
+        self.blocking(move |db| projects::get_project(db, project_id)).await
+    }
+
+    async fn list_projects(&self) -> Result<Vec<Project>, MetaError> {
+        self.blocking(projects::list_projects).await
+    }
+
+    async fn rename_project(
+        &self,
+        project_id: ProjectId,
+        name: String,
+    ) -> Result<Project, MetaError> {
+        self.blocking(move |db| projects::rename_project(db, project_id, name)).await
+    }
+
+    async fn set_project_enabled(
+        &self,
+        project_id: ProjectId,
+        enabled: bool,
+    ) -> Result<Project, MetaError> {
+        self.blocking(move |db| projects::set_project_enabled(db, project_id, enabled)).await
+    }
+
+    async fn delete_project(&self, project_id: ProjectId) -> Result<(), MetaError> {
+        self.blocking(move |db| projects::delete_project(db, project_id)).await
+    }
+
+    async fn get_member(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+    ) -> Result<Option<ProjectMember>, MetaError> {
+        self.blocking(move |db| projects::get_member(db, project_id, user_id)).await
+    }
+
+    async fn list_members(&self, project_id: ProjectId) -> Result<Vec<ProjectMember>, MetaError> {
+        self.blocking(move |db| projects::list_members(db, project_id)).await
+    }
+
+    async fn list_user_memberships(
+        &self,
+        user_id: UserId,
+    ) -> Result<Vec<ProjectMember>, MetaError> {
+        self.blocking(move |db| projects::list_user_memberships(db, user_id)).await
+    }
+
+    async fn set_member_role(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, MetaError> {
+        self.blocking(move |db| projects::set_member_role(db, project_id, user_id, role)).await
+    }
+
+    async fn remove_member(&self, project_id: ProjectId, user_id: UserId) -> Result<(), MetaError> {
+        self.blocking(move |db| projects::remove_member(db, project_id, user_id)).await
+    }
+
+    async fn create_invite(&self, cmd: CreateInvite) -> Result<ProjectInvite, MetaError> {
+        let resolved = ResolvedCreateInvite {
+            cmd,
+            invite_id: InviteId::new(),
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| projects::create_invite(db, resolved)).await
+    }
+
+    async fn get_invite(&self, invite_id: InviteId) -> Result<Option<ProjectInvite>, MetaError> {
+        self.blocking(move |db| projects::get_invite(db, invite_id)).await
+    }
+
+    async fn list_project_invites(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<ProjectInvite>, MetaError> {
+        self.blocking(move |db| projects::list_project_invites(db, project_id)).await
+    }
+
+    async fn list_invites(&self) -> Result<Vec<ProjectInvite>, MetaError> {
+        self.blocking(projects::list_invites).await
+    }
+
+    async fn delete_invite(&self, invite_id: InviteId) -> Result<(), MetaError> {
+        self.blocking(move |db| projects::delete_invite(db, invite_id)).await
+    }
+
+    async fn accept_invite(
+        &self,
+        invite_id: InviteId,
+        user_id: UserId,
+    ) -> Result<ProjectMember, MetaError> {
+        let answer = ResolvedInviteAnswer {
+            invite_id,
+            user_id,
+            accept: true,
+            at: OffsetDateTime::now_utc(),
+        };
+        let member = self.blocking(move |db| projects::answer_invite(db, answer)).await?;
+        member.ok_or_else(|| MetaError::Db("accepting an invite returned no member".into()))
+    }
+
+    async fn decline_invite(&self, invite_id: InviteId, user_id: UserId) -> Result<(), MetaError> {
+        let answer = ResolvedInviteAnswer {
+            invite_id,
+            user_id,
+            accept: false,
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| projects::answer_invite(db, answer)).await?;
+        Ok(())
+    }
+
+    async fn put_project_credential(
+        &self,
+        credential: Credential,
+        max_access_keys: u32,
+    ) -> Result<(), MetaError> {
+        self.blocking(move |db| projects::put_project_credential(db, credential, max_access_keys))
+            .await
+    }
+
+    async fn set_credential_enabled(
+        &self,
+        access_key: &str,
+        enabled: bool,
+    ) -> Result<(), MetaError> {
+        let access_key = access_key.to_string();
+        self.blocking(move |db| projects::set_credential_enabled(db, &access_key, enabled))
+            .await
+    }
+
+    async fn touch_credential(
+        &self,
+        access_key: &str,
+        at: OffsetDateTime,
+    ) -> Result<(), MetaError> {
+        let touch = ResolvedTouchCredential {
+            access_key: access_key.to_string(),
+            at,
+        };
+        self.blocking(move |db| projects::touch_credential(db, touch)).await
+    }
+
+    async fn delete_session(&self, access_key: &str) -> Result<(), MetaError> {
+        let access_key = access_key.to_string();
+        self.blocking(move |db| projects::delete_session(db, &access_key)).await
     }
 
     async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError> {
@@ -1167,6 +1344,10 @@ mod tests {
             kind: Default::default(),
             user_id: None,
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: OffsetDateTime::now_utc(),
         };
         store.put_credential(cred.clone()).await.unwrap();
@@ -1362,6 +1543,10 @@ mod tests {
             kind: Default::default(),
             user_id: None,
             expires_at: None,
+            project_id: None,
+            name: None,
+            session_of: None,
+            last_used_at: None,
             created_at: OffsetDateTime::now_utc(),
         };
         store.put_credential(cred).await.unwrap();

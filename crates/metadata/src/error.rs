@@ -31,6 +31,57 @@ pub enum MetaError {
     #[error("user {0} does not exist")]
     NoSuchUser(String),
 
+    #[error("project {0} does not exist")]
+    NoSuchProject(String),
+
+    #[error("project {0} is disabled")]
+    ProjectDisabled(String),
+
+    #[error("project {0} still has buckets")]
+    ProjectNotEmpty(String),
+
+    #[error("this user has created as many projects as allowed")]
+    ProjectLimitReached,
+
+    #[error("this project has as many access keys as allowed")]
+    KeyLimitReached,
+
+    #[error("that user is not a member of this project")]
+    NoSuchMember,
+
+    #[error("a project must keep at least one Owner")]
+    LastOwner,
+
+    #[error("that invite does not exist")]
+    NoSuchInvite,
+
+    #[error("that invite has expired")]
+    InviteExpired,
+
+    #[error("that email address already has a pending invite to this project")]
+    InviteExists,
+
+    #[error("that person is already a member of this project")]
+    AlreadyMember,
+
+    #[error("that invite was sent to a different email address")]
+    InviteEmailMismatch,
+
+    #[error("the email address on this account isn't verified")]
+    EmailNotVerified,
+
+    #[error("access key {0:?} does not exist")]
+    NoSuchCredential(String),
+
+    #[error("owner {0} has no buckets or keys")]
+    NoSuchOwner(String),
+
+    #[error("owner {0} already belongs to a project")]
+    OwnerAlreadyInProject(String),
+
+    #[error("owner {0} holds an admin key, so it can't become a project")]
+    OwnerIsAdmin(String),
+
     #[error("node {0} is not registered in this cluster")]
     NoSuchNode(String),
 

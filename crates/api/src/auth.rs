@@ -23,6 +23,8 @@ use crate::state::AppState;
 /// Standard SDKs default to a similar window.
 const MAX_CLOCK_SKEW: Duration = Duration::minutes(15);
 
+const LAST_USED_GRANULARITY: Duration = Duration::hours(1);
+
 #[derive(Clone, Copy)]
 pub struct AuthenticatedOwner(pub OwnerId);
 
@@ -61,10 +63,23 @@ pub async fn sigv4_auth(
     )
     .await
     {
-        Ok(verified) if verified.kind != CredentialKind::Standard => {
+        Ok(verified) if verified.kind == CredentialKind::UserSession => {
             auth_error_response(AuthError::WrongCredentialKind, rid)
         }
         Ok(verified) => {
+            // Only ever noted, so it's off the request's path, and only hourly, because
+            // every note is a replicated write.
+            let now = OffsetDateTime::now_utc();
+            if verified.kind == CredentialKind::ProjectAccessKey
+                && verified
+                    .last_used_at
+                    .is_none_or(|at| now - at >= LAST_USED_GRANULARITY)
+            {
+                let credentials = state.credentials.clone();
+                let access_key = verified.access_key.clone();
+                tokio::spawn(async move { credentials.record_use(&access_key, now).await });
+            }
+
             request
                 .extensions_mut()
                 .insert(AuthenticatedOwner(verified.owner_id));

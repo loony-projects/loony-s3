@@ -49,6 +49,7 @@ pub struct VerifiedRequest {
     pub owner_id: OwnerId,
     pub kind: CredentialKind,
     pub user_id: Option<UserId>,
+    pub last_used_at: Option<OffsetDateTime>,
     /// Set when the request declares a streaming payload: `verify` only covers the
     /// headers, so the body's chunk signatures still have to be checked as it arrives.
     pub chunk_signer: Option<ChunkSigner>,
@@ -284,6 +285,7 @@ async fn verify_header(
         owner_id: cred.owner_id,
         kind: cred.kind,
         user_id: cred.user_id,
+        last_used_at: cred.last_used_at,
         chunk_signer,
     })
 }
@@ -379,6 +381,7 @@ async fn verify_presigned(
         owner_id: cred.owner_id,
         kind: cred.kind,
         user_id: cred.user_id,
+        last_used_at: cred.last_used_at,
         chunk_signer: None,
     })
 }
@@ -412,6 +415,7 @@ mod tests {
                     kind: CredentialKind::Standard,
                     user_id: None,
                     expires_at: self.expires_at,
+                    last_used_at: None,
                 })
             } else {
                 None

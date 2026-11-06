@@ -56,7 +56,7 @@ pub struct CreatedSession {
 }
 
 /// `Uuid::new_v4` draws from the OS CSPRNG, for 122 random bits per id.
-fn random_hex(ids: usize) -> String {
+pub(crate) fn random_hex(ids: usize) -> String {
     (0..ids)
         .map(|_| uuid::Uuid::new_v4().simple().to_string())
         .collect()
@@ -160,6 +160,10 @@ pub async fn create_session(
         kind: CredentialKind::UserSession,
         user_id: Some(user.user_id),
         expires_at: Some(expires_at),
+        project_id: None,
+        name: None,
+        session_of: None,
+        last_used_at: None,
         created_at: now,
     };
     state.metadata.put_credential(credential.clone()).await?;
@@ -173,15 +177,13 @@ pub async fn create_session(
     .into_response())
 }
 
-/// Signing out ends this session's key straight away, rather than leaving it to expire.
+/// Signing out ends this session's key straight away, along with the project keys opened
+/// from it, rather than leaving them to expire.
 pub async fn delete_session(
     State(state): State<ConsoleState>,
     Extension(signed_in): Extension<SignedIn>,
 ) -> Result<StatusCode> {
-    state
-        .metadata
-        .delete_credential(&signed_in.access_key)
-        .await?;
+    state.metadata.delete_session(&signed_in.access_key).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use loony_core::{
-    BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId, UserId,
-    VolumeId,
+    BucketId, BucketName, ETag, InviteId, NodeId, ObjectKey, OwnerId, PartManifest, ProjectId,
+    UploadId, UserId, VolumeId,
 };
 use time::OffsetDateTime;
 
@@ -115,6 +115,19 @@ pub struct Credential {
     /// When this key stops working. `None` means it doesn't expire.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
+    /// The project this key acts for. Its `owner_id` is then the project's.
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    /// What people call this key, for keys they manage themselves.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// For a project session key, the user session it was opened from. Signing out of that
+    /// session ends this key too.
+    #[serde(default)]
+    pub session_of: Option<String>,
+    /// Roughly when this key was last used: see `MetadataStore::touch_credential`.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_used_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -122,6 +135,14 @@ pub struct Credential {
 impl Credential {
     pub fn is_expired(&self, now: OffsetDateTime) -> bool {
         self.expires_at.is_some_and(|expires_at| now >= expires_at)
+    }
+
+    /// Whether this is one of the short-lived keys behind a web console sign-in.
+    pub fn is_session(&self) -> bool {
+        matches!(
+            self.kind,
+            CredentialKind::UserSession | CredentialKind::ProjectSession
+        )
     }
 }
 
@@ -135,6 +156,85 @@ pub enum CredentialKind {
     /// Proves who is signed in to the web console. Refused by the LS3 API, so a login
     /// session can never own or touch buckets by itself.
     UserSession,
+    /// What the web console uses to work inside one project, on behalf of one member.
+    ProjectSession,
+    /// A project's long-lived key, for its apps. Belongs to the project rather than the
+    /// member who created it, so it keeps working after they leave.
+    ProjectAccessKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRole {
+    /// Can do everything, including managing members and deleting the project.
+    Owner,
+    /// Can manage buckets and access keys.
+    Member,
+}
+
+/// Buckets belong to `owner_id`, so LS3's ownership checks keep projects apart.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Project {
+    pub project_id: ProjectId,
+    pub name: String,
+    pub owner_id: OwnerId,
+    /// Whether an admin has blocked this project. All its keys stop working while it's off.
+    pub enabled: bool,
+    pub created_by: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectMember {
+    pub project_id: ProjectId,
+    pub user_id: UserId,
+    pub role: ProjectRole,
+    #[serde(with = "time::serde::rfc3339")]
+    pub added_at: OffsetDateTime,
+}
+
+/// A pending invitation. It's deleted once answered or cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectInvite {
+    pub invite_id: InviteId,
+    pub project_id: ProjectId,
+    /// Lowercase.
+    pub email: String,
+    pub role: ProjectRole,
+    pub invited_by: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CreateProject {
+    pub name: String,
+    pub created_by: UserId,
+    /// How many projects `created_by` may have created, counting this one.
+    pub max_created: u32,
+}
+
+/// Turns an owner from before projects existed into a project, with its buckets and keys.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdoptOwner {
+    pub owner_id: OwnerId,
+    pub name: String,
+    /// Who becomes the project's Owner.
+    pub user_id: UserId,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CreateInvite {
+    pub project_id: ProjectId,
+    /// Lowercase.
+    pub email: String,
+    pub role: ProjectRole,
+    pub invited_by: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: OffsetDateTime,
 }
 
 /// Someone who has signed in through the identity provider. The account itself, with its

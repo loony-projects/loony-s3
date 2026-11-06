@@ -18,20 +18,24 @@ use openraft::{BasicNode, Config, Raft};
 use redb::Database;
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, UserId,
+    ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, UserId, InviteId, ProjectId,
 };
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, PartSummary, RegisterNode, StorageStats, User, UserAccess, UserSignIn,
+    AdoptOwner, CreateInvite, CreateProject, MultipartUploadState, PartSummary, Project,
+    ProjectInvite, ProjectMember, ProjectRole, RegisterNode, StorageStats, User, UserAccess,
+    UserSignIn,
 };
 use crate::error::MetaError;
 use crate::raft::applier::{self, db_err};
+use crate::raft::projects;
 use crate::raft::log_store::RedbLogStore;
 use crate::raft::state_machine::RedbStateMachineStore;
 use crate::raft::types::{
     CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
-    ResolvedCreateBucket, ResolvedUserSignIn, TypeConfig,
+    ResolvedAdoptOwner, ResolvedCreateBucket, ResolvedCreateInvite, ResolvedCreateProject,
+    ResolvedInviteAnswer, ResolvedTouchCredential, ResolvedUserSignIn, TypeConfig,
 };
 use crate::store::MetadataStore;
 
@@ -207,6 +211,13 @@ impl RaftMetadataStore {
 /// leader failover during a write still succeeds once the new leader catches up.
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+fn expect_project(response: CommandResponse) -> Result<Project, MetaError> {
+    match response {
+        CommandResponse::Project(project) => Ok(*project),
+        _ => Err(unexpected_response()),
+    }
+}
+
 fn unexpected_response() -> MetaError {
     MetaError::Db("raft state machine returned an unexpected response variant".into())
 }
@@ -357,6 +368,188 @@ impl MetadataStore for RaftMetadataStore {
             CommandResponse::User(user) => Ok(*user),
             _ => Err(unexpected_response()),
         }
+    }
+
+    async fn create_project(&self, cmd: CreateProject) -> Result<Project, MetaError> {
+        let resolved = ResolvedCreateProject {
+            cmd,
+            project_id: ProjectId::new(),
+            owner_id: OwnerId::new(),
+            at: time::OffsetDateTime::now_utc(),
+        };
+        expect_project(self.write(MetadataCommand::CreateProject(Box::new(resolved))).await?)
+    }
+
+    async fn adopt_owner(&self, cmd: AdoptOwner) -> Result<Project, MetaError> {
+        let resolved = ResolvedAdoptOwner {
+            cmd,
+            project_id: ProjectId::new(),
+            at: time::OffsetDateTime::now_utc(),
+        };
+        expect_project(self.write(MetadataCommand::AdoptOwner(Box::new(resolved))).await?)
+    }
+
+    async fn get_project(&self, project_id: ProjectId) -> Result<Option<Project>, MetaError> {
+        self.read(move |db| projects::get_project(db, project_id)).await
+    }
+
+    async fn list_projects(&self) -> Result<Vec<Project>, MetaError> {
+        self.read(projects::list_projects).await
+    }
+
+    async fn rename_project(
+        &self,
+        project_id: ProjectId,
+        name: String,
+    ) -> Result<Project, MetaError> {
+        expect_project(self.write(MetadataCommand::RenameProject(project_id, name)).await?)
+    }
+
+    async fn set_project_enabled(
+        &self,
+        project_id: ProjectId,
+        enabled: bool,
+    ) -> Result<Project, MetaError> {
+        expect_project(self.write(MetadataCommand::SetProjectEnabled(project_id, enabled)).await?)
+    }
+
+    async fn delete_project(&self, project_id: ProjectId) -> Result<(), MetaError> {
+        self.write(MetadataCommand::DeleteProject(project_id)).await?;
+        Ok(())
+    }
+
+    async fn get_member(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+    ) -> Result<Option<ProjectMember>, MetaError> {
+        self.read(move |db| projects::get_member(db, project_id, user_id)).await
+    }
+
+    async fn list_members(&self, project_id: ProjectId) -> Result<Vec<ProjectMember>, MetaError> {
+        self.read(move |db| projects::list_members(db, project_id)).await
+    }
+
+    async fn list_user_memberships(
+        &self,
+        user_id: UserId,
+    ) -> Result<Vec<ProjectMember>, MetaError> {
+        self.read(move |db| projects::list_user_memberships(db, user_id)).await
+    }
+
+    async fn set_member_role(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, MetaError> {
+        match self.write(MetadataCommand::SetMemberRole(project_id, user_id, role)).await? {
+            CommandResponse::Member(member) => Ok(*member),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn remove_member(&self, project_id: ProjectId, user_id: UserId) -> Result<(), MetaError> {
+        self.write(MetadataCommand::RemoveMember(project_id, user_id)).await?;
+        Ok(())
+    }
+
+    async fn create_invite(&self, cmd: CreateInvite) -> Result<ProjectInvite, MetaError> {
+        let resolved = ResolvedCreateInvite {
+            cmd,
+            invite_id: InviteId::new(),
+            at: time::OffsetDateTime::now_utc(),
+        };
+        match self.write(MetadataCommand::CreateInvite(Box::new(resolved))).await? {
+            CommandResponse::Invite(invite) => Ok(*invite),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn get_invite(&self, invite_id: InviteId) -> Result<Option<ProjectInvite>, MetaError> {
+        self.read(move |db| projects::get_invite(db, invite_id)).await
+    }
+
+    async fn list_project_invites(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<ProjectInvite>, MetaError> {
+        self.read(move |db| projects::list_project_invites(db, project_id)).await
+    }
+
+    async fn list_invites(&self) -> Result<Vec<ProjectInvite>, MetaError> {
+        self.read(projects::list_invites).await
+    }
+
+    async fn delete_invite(&self, invite_id: InviteId) -> Result<(), MetaError> {
+        self.write(MetadataCommand::DeleteInvite(invite_id)).await?;
+        Ok(())
+    }
+
+    async fn accept_invite(
+        &self,
+        invite_id: InviteId,
+        user_id: UserId,
+    ) -> Result<ProjectMember, MetaError> {
+        let answer = ResolvedInviteAnswer {
+            invite_id,
+            user_id,
+            accept: true,
+            at: time::OffsetDateTime::now_utc(),
+        };
+        match self.write(MetadataCommand::AnswerInvite(Box::new(answer))).await? {
+            CommandResponse::Member(member) => Ok(*member),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn decline_invite(&self, invite_id: InviteId, user_id: UserId) -> Result<(), MetaError> {
+        let answer = ResolvedInviteAnswer {
+            invite_id,
+            user_id,
+            accept: false,
+            at: time::OffsetDateTime::now_utc(),
+        };
+        self.write(MetadataCommand::AnswerInvite(Box::new(answer))).await?;
+        Ok(())
+    }
+
+    async fn put_project_credential(
+        &self,
+        credential: Credential,
+        max_access_keys: u32,
+    ) -> Result<(), MetaError> {
+        self.write(MetadataCommand::PutProjectCredential(Box::new(credential), max_access_keys))
+            .await?;
+        Ok(())
+    }
+
+    async fn set_credential_enabled(
+        &self,
+        access_key: &str,
+        enabled: bool,
+    ) -> Result<(), MetaError> {
+        self.write(MetadataCommand::SetCredentialEnabled(access_key.to_string(), enabled))
+            .await?;
+        Ok(())
+    }
+
+    async fn touch_credential(
+        &self,
+        access_key: &str,
+        at: time::OffsetDateTime,
+    ) -> Result<(), MetaError> {
+        let touch = ResolvedTouchCredential {
+            access_key: access_key.to_string(),
+            at,
+        };
+        self.write(MetadataCommand::TouchCredential(Box::new(touch))).await?;
+        Ok(())
+    }
+
+    async fn delete_session(&self, access_key: &str) -> Result<(), MetaError> {
+        self.write(MetadataCommand::DeleteSession(access_key.to_string())).await?;
+        Ok(())
     }
 
     async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError> {

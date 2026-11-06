@@ -19,9 +19,10 @@ mod redb_store;
 mod store;
 
 pub use commands::{
-    BeginMultipart, BucketUsage, CompleteMultipart, CreateBucket, Credential, CredentialKind,
-    ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
-    RegisterNode, StorageStats, User, UserAccess, UserSignIn,
+    AdoptOwner, BeginMultipart, BucketUsage, CompleteMultipart, CreateBucket, CreateInvite,
+    CreateProject, Credential, CredentialKind, ListObjectsPage, ListObjectsQuery,
+    MultipartUploadState, ObjectSummary, PartSummary, Project, ProjectInvite, ProjectMember,
+    ProjectRole, RegisterNode, StorageStats, User, UserAccess, UserSignIn,
 };
 pub use error::MetaError;
 pub use raft::{
