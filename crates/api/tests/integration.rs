@@ -885,6 +885,139 @@ async fn aborting_a_multipart_upload_via_http_discards_it() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+const UNSIGNED_TRAILER: &str = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
+const SIGNED_CHUNKS: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+const SIGNED_CHUNKS_TRAILER: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
+
+/// A request signed with `payload_mode` in place of a body hash. `body` receives the
+/// chunk signer, seeded with this request's signature, to build chunk signatures from.
+fn request_with_payload_mode(
+    method: &str,
+    uri: &str,
+    payload_mode: &str,
+    extra_headers: &[(&str, &str)],
+    body: impl FnOnce(loony_auth::ChunkSigner) -> Vec<u8>,
+) -> Request<Body> {
+    let amz_date = loony_auth::amz_date_now();
+    let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
+
+    let mut headers = vec![
+        ("host".to_string(), "localhost".to_string()),
+        ("x-amz-date".to_string(), amz_date.clone()),
+        ("x-amz-content-sha256".to_string(), payload_mode.to_string()),
+    ];
+    headers.extend(
+        extra_headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+    );
+    let mut signed_headers: Vec<String> = headers.iter().map(|(k, _)| k.clone()).collect();
+    signed_headers.sort();
+
+    let authorization = loony_auth::sign_header_auth(
+        method,
+        path,
+        query,
+        &headers,
+        &signed_headers,
+        payload_mode,
+        ACCESS_KEY,
+        SECRET_KEY,
+        REGION,
+        &amz_date,
+    );
+    let seed = authorization
+        .rsplit("Signature=")
+        .next()
+        .unwrap()
+        .to_string();
+    let signer = loony_auth::ChunkSigner::new(SECRET_KEY, &amz_date, REGION, seed);
+
+    let mut builder = Request::builder().method(method).uri(uri);
+    for (k, v) in &headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    builder
+        .header(header::AUTHORIZATION, authorization)
+        .body(Body::from(body(signer)))
+        .unwrap()
+}
+
+fn sha256_base64(data: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(Sha256::digest(data))
+}
+
+/// `aws-chunked` framing as the Python and JavaScript SDKs send it over HTTPS by default.
+fn unsigned_chunked(data: &[u8], chunk_size: usize, checksum: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    for chunk in data.chunks(chunk_size) {
+        body.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+        body.extend_from_slice(chunk);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("0\r\nx-amz-checksum-sha256:{checksum}\r\n\r\n").as_bytes());
+    body
+}
+
+fn unsigned_chunked_put(uri: &str, data: &[u8], body: Vec<u8>) -> Request<Body> {
+    let length = data.len().to_string();
+    request_with_payload_mode(
+        "PUT",
+        uri,
+        UNSIGNED_TRAILER,
+        &[
+            ("content-encoding", "aws-chunked"),
+            ("x-amz-trailer", "x-amz-checksum-sha256"),
+            ("x-amz-decoded-content-length", &length),
+        ],
+        |_| body,
+    )
+}
+
+fn signed_chunks(mut signer: loony_auth::ChunkSigner, data: &[u8], chunk_size: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    for chunk in data.chunks(chunk_size).chain(std::iter::once(&b""[..])) {
+        let hash = sha256_hex(chunk);
+        let signature = signer.sign_chunk(&hash);
+        assert!(signer.verify_chunk(&hash, &signature));
+        body.extend_from_slice(
+            format!("{:x};chunk-signature={signature}\r\n", chunk.len()).as_bytes(),
+        );
+        body.extend_from_slice(chunk);
+        body.extend_from_slice(b"\r\n");
+    }
+    body
+}
+
+async fn get_bytes(app: &TestApp, uri: &str) -> Vec<u8> {
+    let res = app.router.clone().oneshot(req("GET", uri)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "GET {uri}");
+    res.into_body().collect().await.unwrap().to_bytes().to_vec()
+}
+
+async fn status_and_code(app: &TestApp, request: Request<Body>) -> (StatusCode, String) {
+    let res = app.router.clone().oneshot(request).await.unwrap();
+    let status = res.status();
+    let body = body_string(res).await;
+    let code = if body.contains("<Code>") {
+        xml_tag(&body, "Code")
+    } else {
+        String::new()
+    };
+    (status, code)
+}
+
+async fn create_bucket(app: &TestApp, name: &str) {
+    let res = app
+        .router
+        .clone()
+        .oneshot(req("PUT", &format!("/{name}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn bucket_operations_accept_a_trailing_slash() {
     let app = test_app().await;
@@ -906,4 +1039,266 @@ async fn bucket_operations_accept_a_trailing_slash() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn aws_chunked_uploads_store_only_the_object_bytes() {
+    let app = test_app().await;
+    create_bucket(&app, "chunked").await;
+
+    // Under the small-object threshold, over it (erasure coded), and empty.
+    for (key, data) in [
+        ("small", b"hello".to_vec()),
+        ("large", vec![7u8; 2 * 1024 * 1024 + 123]),
+        ("empty", Vec::new()),
+    ] {
+        let uri = format!("/chunked/{key}");
+        let body = unsigned_chunked(&data, 64 * 1024, &sha256_base64(&data));
+        let res = app
+            .router
+            .clone()
+            .oneshot(unsigned_chunked_put(&uri, &data, body))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{key}");
+
+        assert_eq!(get_bytes(&app, &uri).await, data, "{key}");
+
+        let res = app.router.clone().oneshot(req("HEAD", &uri)).await.unwrap();
+        assert_eq!(
+            res.headers().get(header::CONTENT_LENGTH).unwrap(),
+            &data.len().to_string(),
+            "{key}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn signed_chunked_uploads_store_only_the_object_bytes() {
+    let app = test_app().await;
+    create_bucket(&app, "signed").await;
+
+    let data = vec![9u8; 200 * 1024];
+    let length = data.len().to_string();
+    let request = request_with_payload_mode(
+        "PUT",
+        "/signed/object",
+        SIGNED_CHUNKS,
+        &[
+            ("content-encoding", "aws-chunked"),
+            ("x-amz-decoded-content-length", &length),
+        ],
+        |signer| signed_chunks(signer, &data, 64 * 1024),
+    );
+    assert_eq!(status_and_code(&app, request).await.0, StatusCode::OK);
+    assert_eq!(get_bytes(&app, "/signed/object").await, data);
+}
+
+#[tokio::test]
+async fn a_tampered_signed_chunk_is_refused_and_nothing_is_stored() {
+    let app = test_app().await;
+    create_bucket(&app, "signed").await;
+
+    let data = vec![9u8; 200 * 1024];
+    let request = request_with_payload_mode(
+        "PUT",
+        "/signed/object",
+        SIGNED_CHUNKS,
+        &[("content-encoding", "aws-chunked")],
+        |signer| {
+            let mut body = signed_chunks(signer, &data, 64 * 1024);
+            let middle = body.len() / 2;
+            body[middle] ^= 1;
+            body
+        },
+    );
+    assert_eq!(
+        status_and_code(&app, request).await,
+        (StatusCode::FORBIDDEN, "SignatureDoesNotMatch".to_string())
+    );
+    assert_eq!(
+        status_and_code(&app, req("GET", "/signed/object")).await,
+        (StatusCode::NOT_FOUND, "NoSuchKey".to_string())
+    );
+}
+
+#[tokio::test]
+async fn signed_trailers_are_accepted_when_correct() {
+    let app = test_app().await;
+    create_bucket(&app, "signed").await;
+
+    let data = b"hello world".to_vec();
+    let request = request_with_payload_mode(
+        "PUT",
+        "/signed/trailer",
+        SIGNED_CHUNKS_TRAILER,
+        &[
+            ("content-encoding", "aws-chunked"),
+            ("x-amz-trailer", "x-amz-checksum-sha256"),
+        ],
+        |mut signer| {
+            let hash = sha256_hex(&data);
+            let chunk_signature = signer.sign_chunk(&hash);
+            assert!(signer.verify_chunk(&hash, &chunk_signature));
+            let empty = sha256_hex(b"");
+            let final_signature = signer.sign_chunk(&empty);
+            assert!(signer.verify_chunk(&empty, &final_signature));
+            let checksum = sha256_base64(&data);
+            let trailer_hash = sha256_hex(format!("x-amz-checksum-sha256:{checksum}\n").as_bytes());
+            let trailer_signature = signer.sign_trailer(&trailer_hash);
+
+            let mut body =
+                format!("{:x};chunk-signature={chunk_signature}\r\n", data.len()).into_bytes();
+            body.extend_from_slice(&data);
+            body.extend_from_slice(
+                format!(
+                    "\r\n0;chunk-signature={final_signature}\r\n\
+                     x-amz-checksum-sha256:{checksum}\r\n\
+                     x-amz-trailer-signature:{trailer_signature}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body
+        },
+    );
+    assert_eq!(status_and_code(&app, request).await.0, StatusCode::OK);
+    assert_eq!(get_bytes(&app, "/signed/trailer").await, data);
+}
+
+#[tokio::test]
+async fn a_failed_upload_leaves_the_existing_object_in_place() {
+    let app = test_app().await;
+    create_bucket(&app, "keep").await;
+
+    let original = b"the original".to_vec();
+    let body = unsigned_chunked(&original, 1024, &sha256_base64(&original));
+    let res = app
+        .router
+        .clone()
+        .oneshot(unsigned_chunked_put("/keep/file", &original, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Small enough to be replicated, and large enough to be erasure coded.
+    for size in [100, 2 * 1024 * 1024] {
+        let replacement = vec![1u8; size];
+
+        let wrong_checksum = unsigned_chunked(&replacement, 64 * 1024, &sha256_base64(b"other"));
+        assert_eq!(
+            status_and_code(
+                &app,
+                unsigned_chunked_put("/keep/file", &replacement, wrong_checksum)
+            )
+            .await,
+            (StatusCode::BAD_REQUEST, "BadDigest".to_string()),
+            "{size} bytes, wrong checksum"
+        );
+        assert_eq!(get_bytes(&app, "/keep/file").await, original);
+
+        let mut cut_off = unsigned_chunked(&replacement, 64 * 1024, &sha256_base64(&replacement));
+        cut_off.truncate(cut_off.len() / 2);
+        assert_eq!(
+            status_and_code(
+                &app,
+                unsigned_chunked_put("/keep/file", &replacement, cut_off)
+            )
+            .await,
+            (StatusCode::BAD_REQUEST, "IncompleteBody".to_string()),
+            "{size} bytes, cut off"
+        );
+        assert_eq!(get_bytes(&app, "/keep/file").await, original);
+    }
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_match_its_sha256_is_refused() {
+    let app = test_app().await;
+    create_bucket(&app, "hashes").await;
+
+    let declared = sha256_hex(b"what was signed");
+    let request = request_with_payload_mode("PUT", "/hashes/file", &declared, &[], |_| {
+        b"something else".to_vec()
+    });
+    assert_eq!(
+        status_and_code(&app, request).await,
+        (StatusCode::BAD_REQUEST, "BadDigest".to_string())
+    );
+    assert_eq!(
+        status_and_code(&app, req("GET", "/hashes/file")).await,
+        (StatusCode::NOT_FOUND, "NoSuchKey".to_string())
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_payload_mode_is_refused_rather_than_stored() {
+    let app = test_app().await;
+    create_bucket(&app, "modes").await;
+
+    let request = request_with_payload_mode(
+        "PUT",
+        "/modes/file",
+        "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD",
+        &[("content-encoding", "aws-chunked")],
+        |_| b"5\r\nhello\r\n0\r\n\r\n".to_vec(),
+    );
+    assert_eq!(
+        status_and_code(&app, request).await,
+        (StatusCode::NOT_IMPLEMENTED, "NotImplemented".to_string())
+    );
+    assert_eq!(
+        status_and_code(&app, req("GET", "/modes/file")).await,
+        (StatusCode::NOT_FOUND, "NoSuchKey".to_string())
+    );
+}
+
+#[tokio::test]
+async fn multipart_parts_sent_as_aws_chunked_store_only_the_object_bytes() {
+    let app = test_app().await;
+    create_bucket(&app, "parts").await;
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request("POST", "/parts/big?uploads", Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let upload_id = xml_tag(&body_string(res).await, "UploadId");
+
+    let first = vec![3u8; 700 * 1024];
+    let second = b"the tail".to_vec();
+    let mut complete = String::from("<CompleteMultipartUpload>");
+    for (number, data) in [(1, &first), (2, &second)] {
+        let uri = format!("/parts/big?partNumber={number}&uploadId={upload_id}");
+        let body = unsigned_chunked(data, 64 * 1024, &sha256_base64(data));
+        let res = app
+            .router
+            .clone()
+            .oneshot(unsigned_chunked_put(&uri, data, body))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "part {number}");
+        let etag = res.headers().get(header::ETAG).unwrap().to_str().unwrap();
+        complete.push_str(&format!(
+            "<Part><PartNumber>{number}</PartNumber><ETag>{etag}</ETag></Part>"
+        ));
+    }
+    complete.push_str("</CompleteMultipartUpload>");
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request(
+            "POST",
+            &format!("/parts/big?uploadId={upload_id}"),
+            complete.into_bytes(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let mut expected = first;
+    expected.extend_from_slice(&second);
+    assert_eq!(get_bytes(&app, "/parts/big").await, expected);
 }

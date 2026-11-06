@@ -70,9 +70,7 @@ export async function signedFetch(method: string, path: string, opts: SignedRequ
     payloadHash = EMPTY_BODY_SHA256;
   } else {
     // Blob/ArrayBuffer/etc. bodies: hashing would mean buffering the whole thing
-    // first, which defeats streaming for large uploads -- same tradeoff the backend
-    // documents for why it trusts the declared x-amz-content-sha256 rather than
-    // re-verifying it against the bytes it streams to disk.
+    // first, which defeats streaming for large uploads.
     payloadHash = 'UNSIGNED-PAYLOAD';
   }
 

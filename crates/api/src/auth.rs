@@ -64,6 +64,9 @@ pub async fn sigv4_auth(
             request
                 .extensions_mut()
                 .insert(AuthenticatedOwner(verified.owner_id));
+            if let Some(signer) = verified.chunk_signer {
+                request.extensions_mut().insert(signer);
+            }
             next.run(request).await
         }
         Err(err) => auth_error_response(err, rid),

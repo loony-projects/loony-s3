@@ -73,6 +73,20 @@ fn map_error(error: &Ls3Error) -> (StatusCode, &'static str, String) {
             "InvalidPartOrder",
             "The list of parts was not in ascending order".into(),
         ),
+        Ls3Error::BadDigest(reason) => (StatusCode::BAD_REQUEST, "BadDigest", reason.clone()),
+        Ls3Error::IncompleteBody(reason) => {
+            (StatusCode::BAD_REQUEST, "IncompleteBody", reason.clone())
+        }
+        Ls3Error::SignatureDoesNotMatch => (
+            StatusCode::FORBIDDEN,
+            "SignatureDoesNotMatch",
+            "The chunk signature we calculated does not match the signature you provided".into(),
+        ),
+        Ls3Error::NotImplemented(reason) => (
+            StatusCode::NOT_IMPLEMENTED,
+            "NotImplemented",
+            reason.clone(),
+        ),
         Ls3Error::Meta(_) | Ls3Error::Storage(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",

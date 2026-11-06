@@ -14,6 +14,7 @@ mod auth;
 mod error;
 mod handlers;
 mod http_date;
+mod payload;
 mod state;
 mod xml;
 

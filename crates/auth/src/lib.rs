@@ -5,8 +5,10 @@
 mod canonical;
 mod credential;
 mod sign;
+mod streaming;
 mod verify;
 
 pub use credential::{CredentialProvider, SigningCredential};
 pub use sign::{amz_date_now, sign_header_auth, sign_presigned_query};
+pub use streaming::ChunkSigner;
 pub use verify::{AuthError, RequestParts, VerifiedRequest, verify};

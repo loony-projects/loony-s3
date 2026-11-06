@@ -33,9 +33,11 @@ virtual-hosted-style (`{bucket}.host`) routing.
   object is always returned rather than an error or a `206 Partial Content`. This means
   any client that downloads large objects with parallel ranged GETs (many CLIs do,
   above some size threshold, independent of multipart) will produce a corrupted local
-  file — each parallel request gets the *full* object instead of its slice. Disable
-  parallel downloads until Range support lands (e.g. rclone's
-  `--multi-thread-streams 0`), or use a single plain GET.
+  file — each parallel request gets the *full* object instead of its slice. `aws s3 cp`
+  and boto3's `download_file` both do this by default: a 20 MiB object came back as a
+  36 MiB file in testing. Disable parallel downloads until Range support lands (e.g.
+  rclone's `--multi-thread-streams 0`), or use a single plain GET (boto3's `get_object`,
+  `aws s3api get-object`).
 - **`x-amz-meta-*` response headers** — user metadata given to `PutObject`/
   `CreateMultipartUpload` is stored and preserved correctly (round-trips through a
   multipart Complete too), but `GetObject`/`HeadObject` never echo it back as response
@@ -65,7 +67,34 @@ rather than seeing another owner's data, even if it can prove it knows the bucke
 Credentials are managed as records in the metadata store, keyed by access key. The one
 guaranteed to exist is whatever `LS3_ROOT_ACCESS_KEY`/`LS3_ROOT_SECRET_KEY` (or the
 dev-derived fallback) resolves to at startup — see [configuration.md](configuration.md).
-There's no API to create additional credentials yet.
+The admin API creates additional credentials — see [admin.md](admin.md).
+
+Presigned URLs must use SigV4. boto3 can produce older SigV2 URLs by default, which get a
+`403`, so set `signature_version="s3v4"` when generating them.
+
+## Upload bodies
+
+`x-amz-content-sha256` on `PutObject` and `UploadPart` says how the body is sent:
+
+| Value | Body | Checked |
+|---|---|---|
+| A SHA-256 in hex | Plain | The body must match the hash |
+| `UNSIGNED-PAYLOAD`, or no header | Plain | Nothing |
+| `STREAMING-UNSIGNED-PAYLOAD-TRAILER` | `aws-chunked` | The trailer's checksum, if one is declared |
+| `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | `aws-chunked` | Every chunk signature |
+| `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | `aws-chunked` | Every chunk signature, the trailer's signature and its checksum |
+
+The `aws-chunked` framing is removed before storage, so the object holds only its real
+bytes. Any other value is refused with `501 NotImplemented` rather than stored as-is, which
+includes the SigV4A `STREAMING-AWS4-ECDSA-*` modes.
+
+A checksum can also be sent as an `x-amz-checksum-*` header or an `x-amz-trailer`, using
+CRC32, CRC32C, CRC64NVME, SHA-1 or SHA-256. Checksums aren't stored, and aren't returned on
+responses.
+
+A failed check fails the upload, and any existing object at that key is left unchanged.
+Shards already written by the failed upload aren't cleaned up yet, the same as for a client
+that disconnects partway through.
 
 ## Naming rules
 
@@ -130,6 +159,9 @@ Errors are XML `<Error>` bodies matching the upstream protocol's shape and vocab
 | `BucketAlreadyExists` | 409 | |
 | `BucketNotEmpty` | 409 | `DeleteBucket` on a non-empty bucket |
 | `InvalidBucketName` | 400 | |
+| `BadDigest` | 400 | The body doesn't match its declared hash or checksum |
+| `IncompleteBody` | 400 | An `aws-chunked` body is malformed, cut short, or the wrong length |
+| `NotImplemented` | 501 | An upload body mode this server doesn't support |
 | `InvalidArgument` | 400 | |
 | `NoSuchUpload` | 404 | Unknown, aborted, already-completed, or wrong-bucket/key `uploadId` |
 | `InvalidPart` | 400 | `CompleteMultipartUpload` referenced a part number never recorded, or gave an ETag that doesn't match what was recorded |

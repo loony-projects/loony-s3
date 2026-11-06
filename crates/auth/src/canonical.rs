@@ -22,12 +22,16 @@ pub fn compute_signature(
     service: &str,
     string_to_sign: &str,
 ) -> String {
+    let k_signing = signing_key(secret_key, date, region, service);
+    hex(&hmac_sha256(&k_signing, string_to_sign.as_bytes()))
+}
+
+pub fn signing_key(secret_key: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let k_secret = format!("{SIGNING_KEY_PREFIX}{secret_key}");
     let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
     let k_region = hmac_sha256(&k_date, region.as_bytes());
     let k_service = hmac_sha256(&k_region, service.as_bytes());
-    let k_signing = hmac_sha256(&k_service, SCOPE_TERMINATOR.as_bytes());
-    hex(&hmac_sha256(&k_signing, string_to_sign.as_bytes()))
+    hmac_sha256(&k_service, SCOPE_TERMINATOR.as_bytes())
 }
 
 pub fn hex(bytes: &[u8]) -> String {

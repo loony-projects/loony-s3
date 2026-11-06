@@ -114,6 +114,53 @@ or the web UI's "copy link" action, then:
 curl -o photo.jpg "<presigned url>"
 ```
 
+### AWS SDKs and the AWS CLI
+
+Standard SDKs work with their default settings, apart from pointing them at this server
+and using path-style addressing. These were tested over HTTPS with boto3 1.43, the
+JavaScript SDK v3 and AWS CLI 2.36.
+
+```python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url="https://s3.example.com",
+    region_name="us-east-1",
+    aws_access_key_id=ACCESS_KEY,
+    aws_secret_access_key=SECRET_KEY,
+    # s3v4 is only needed for presigned URLs.
+    config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+)
+s3.upload_file("photo.jpg", "my-bucket", "photo.jpg")
+data = s3.get_object(Bucket="my-bucket", Key="photo.jpg")["Body"].read()
+```
+
+```js
+import { S3Client } from "@aws-sdk/client-s3";
+
+const s3 = new S3Client({
+  endpoint: "https://s3.example.com",
+  region: "us-east-1",
+  forcePathStyle: true,
+  credentials: { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY },
+});
+```
+
+```bash
+aws --endpoint-url https://s3.example.com s3 cp photo.jpg s3://my-bucket/photo.jpg
+aws --endpoint-url https://s3.example.com s3api get-object \
+  --bucket my-bucket --key photo.jpg photo.jpg
+```
+
+**Don't use `aws s3 cp` or boto3's `download_file` to download large objects.** They
+download in parallel using Range requests, which this server doesn't support yet, and the
+local file ends up corrupted without an error (see
+[api-reference.md](api-reference.md)). Use a single GET, as above.
+
+`DeleteObjects` isn't supported, so delete objects one at a time.
+
 ## Run the web UI
 
 The frontend (`frontend/`) is a Vite/React app that signs every request with SigV4

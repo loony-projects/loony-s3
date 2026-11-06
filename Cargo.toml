@@ -53,6 +53,8 @@ tempfile = "3"
 redb = "2"
 md-5 = "0.10"
 base64 = "0.22"
+crc = "3"
+sha1 = "0.10"
 reed-solomon-simd = "3"
 reqwest = { version = "0.12", features = ["stream", "json"] }
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }

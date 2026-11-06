@@ -10,6 +10,7 @@ use crate::canonical::{
     canonical_uri, compute_signature, constant_time_eq, parse_query_string, sha256_hex,
 };
 use crate::credential::CredentialProvider;
+use crate::streaming::{ChunkSigner, STREAMING_PREFIX};
 use loony_core::OwnerId;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
@@ -40,6 +41,9 @@ pub enum AuthError {
 pub struct VerifiedRequest {
     pub access_key: String,
     pub owner_id: OwnerId,
+    /// Set when the request declares a streaming payload: `verify` only covers the
+    /// headers, so the body's chunk signatures still have to be checked as it arrives.
+    pub chunk_signer: Option<ChunkSigner>,
 }
 
 /// The pieces of an HTTP request SigV4 verification needs. Framework-agnostic on
@@ -250,9 +254,19 @@ async fn verify_header(
         return Err(AuthError::SignatureMismatch);
     }
 
+    let chunk_signer = payload_hash.starts_with(STREAMING_PREFIX).then(|| {
+        ChunkSigner::new(
+            &cred.secret_key,
+            &amz_date,
+            &parsed.region,
+            parsed.signature.clone(),
+        )
+    });
+
     Ok(VerifiedRequest {
         access_key: parsed.access_key,
         owner_id: cred.owner_id,
+        chunk_signer,
     })
 }
 
@@ -347,6 +361,7 @@ async fn verify_presigned(
     Ok(VerifiedRequest {
         access_key,
         owner_id: cred.owner_id,
+        chunk_signer: None,
     })
 }
 

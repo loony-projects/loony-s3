@@ -27,6 +27,14 @@ pub enum Ls3Error {
     InvalidPart,
     #[error("the list of parts was not in ascending order")]
     InvalidPartOrder,
+    #[error("the request body does not match its declared checksum: {0}")]
+    BadDigest(String),
+    #[error("the request body is incomplete or malformed: {0}")]
+    IncompleteBody(String),
+    #[error("a chunk signature in the request body does not match")]
+    SignatureDoesNotMatch,
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 
     #[error("metadata store error: {0}")]
     Meta(#[from] MetaError),

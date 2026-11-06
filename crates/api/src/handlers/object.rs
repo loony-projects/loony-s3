@@ -4,17 +4,17 @@ use axum::body::{Body, to_bytes};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use futures::StreamExt;
 use serde::Deserialize;
 
+use loony_auth::ChunkSigner;
 use loony_core::{BucketName, ObjectKey, UploadId};
 use loony_object::Ls3Error;
-use loony_storage::ShardBytesIn;
 
 use super::request_id;
 use crate::auth::AuthenticatedOwner;
 use crate::error::ApiError;
 use crate::http_date::http_date;
+use crate::payload;
 use crate::state::AppState;
 use crate::xml;
 
@@ -95,19 +95,18 @@ pub async fn put_object(
     headers: HeaderMap,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<MultipartQuery>,
+    chunk_signer: Option<Extension<ChunkSigner>>,
     body: Body,
 ) -> Result<Response, ApiError> {
     let rid = request_id(&headers);
     let (bucket_name, object_key) = parse_bucket_and_key(&bucket, &key, &rid)?;
     let resource = format!("/{bucket}/{key}");
 
+    let (boxed, failure) = payload::decode_body(&headers, chunk_signer.map(|s| s.0), body)
+        .map_err(|e| ApiError::new(e.into(), rid.clone(), Some(resource.clone())))?;
+
     if let (Some(upload_id_raw), Some(part_number)) = (&query.upload_id, query.part_number) {
         let upload_id = parse_upload_id(upload_id_raw, &rid, &resource)?;
-        let stream = body
-            .into_data_stream()
-            .map(|item| item.map_err(std::io::Error::other));
-        let boxed: ShardBytesIn = Box::pin(stream);
-
         let etag = state
             .objects
             .upload_part(
@@ -119,7 +118,7 @@ pub async fn put_object(
                 owner.0,
             )
             .await
-            .map_err(|e| ApiError::new(e, rid.clone(), Some(resource)))?;
+            .map_err(|e| ApiError::new(failure.explain(e), rid.clone(), Some(resource)))?;
 
         return Ok((StatusCode::OK, [(header::ETAG, xml::quoted_etag(&etag))]).into_response());
     }
@@ -130,11 +129,6 @@ pub async fn put_object(
         .unwrap_or("application/octet-stream")
         .to_string();
     let metadata = user_metadata(&headers);
-
-    let stream = body
-        .into_data_stream()
-        .map(|item| item.map_err(std::io::Error::other));
-    let boxed: ShardBytesIn = Box::pin(stream);
 
     let manifest = state
         .objects
@@ -147,7 +141,7 @@ pub async fn put_object(
             owner.0,
         )
         .await
-        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource)))?;
+        .map_err(|e| ApiError::new(failure.explain(e), rid.clone(), Some(resource)))?;
 
     Ok((
         StatusCode::OK,
