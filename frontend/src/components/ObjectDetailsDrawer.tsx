@@ -151,11 +151,6 @@ export function ObjectDetailsDrawer({ bucket, object, onClose, onDownload, onSha
             ) : (
               <>
                 <Preview key={previewUrl} kind={kind} url={previewUrl} size={size} />
-                {(kind === 'video' || kind === 'audio') && (
-                  <p className="mt-2 text-xs text-gray-400">
-                    Seeking may not work yet: the server doesn't support byte-range requests.
-                  </p>
-                )}
               </>
             )}
           </div>

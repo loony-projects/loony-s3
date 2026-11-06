@@ -100,10 +100,6 @@ To configure it by hand against another server instead, set the same variables:
 `..._ENDPOINT=http://host:7353`, `..._REGION` (must match `LS3_REGION`),
 `..._ACCESS_KEY_ID`, `..._SECRET_ACCESS_KEY`.
 
-For large downloads add `--multi-thread-streams 0`: rclone otherwise fetches big files
-with parallel HTTP Range requests, which this server doesn't support yet (see
-[api-reference.md](api-reference.md)).
-
 ### Presigned URLs
 
 A presigned URL needs no `Authorization` header from whoever uses it, so any plain HTTP
@@ -134,7 +130,7 @@ s3 = boto3.client(
     config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
 )
 s3.upload_file("photo.jpg", "my-bucket", "photo.jpg")
-data = s3.get_object(Bucket="my-bucket", Key="photo.jpg")["Body"].read()
+s3.download_file("my-bucket", "photo.jpg", "downloaded.jpg")
 ```
 
 ```js
@@ -150,14 +146,8 @@ const s3 = new S3Client({
 
 ```bash
 aws --endpoint-url https://s3.example.com s3 cp photo.jpg s3://my-bucket/photo.jpg
-aws --endpoint-url https://s3.example.com s3api get-object \
-  --bucket my-bucket --key photo.jpg photo.jpg
+aws --endpoint-url https://s3.example.com s3 cp s3://my-bucket/photo.jpg photo.jpg
 ```
-
-**Don't use `aws s3 cp` or boto3's `download_file` to download large objects.** They
-download in parallel using Range requests, which this server doesn't support yet, and the
-local file ends up corrupted without an error (see
-[api-reference.md](api-reference.md)). Use a single GET, as above.
 
 `DeleteObjects` isn't supported, so delete objects one at a time.
 

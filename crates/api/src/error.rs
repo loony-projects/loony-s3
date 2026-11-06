@@ -87,6 +87,16 @@ fn map_error(error: &Ls3Error) -> (StatusCode, &'static str, String) {
             "NotImplemented",
             reason.clone(),
         ),
+        Ls3Error::InvalidRange { .. } => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "InvalidRange",
+            "The requested range is not satisfiable".into(),
+        ),
+        Ls3Error::PreconditionFailed => (
+            StatusCode::PRECONDITION_FAILED,
+            "PreconditionFailed",
+            "At least one of the preconditions you specified did not hold".into(),
+        ),
         Ls3Error::Meta(_) | Ls3Error::Storage(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
@@ -102,7 +112,14 @@ impl IntoResponse for ApiError {
         }
         let (status, code, message) = map_error(&self.error);
         let body = xml::error_xml(code, &message, &self.request_id, self.resource.as_deref());
-        (status, [(header::CONTENT_TYPE, "application/xml")], body).into_response()
+        let mut response =
+            (status, [(header::CONTENT_TYPE, "application/xml")], body).into_response();
+        if let Ls3Error::InvalidRange { size } = self.error
+            && let Ok(value) = format!("bytes */{size}").parse()
+        {
+            response.headers_mut().insert(header::CONTENT_RANGE, value);
+        }
+        response
     }
 }
 

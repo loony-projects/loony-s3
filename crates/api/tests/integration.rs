@@ -1302,3 +1302,365 @@ async fn multipart_parts_sent_as_aws_chunked_store_only_the_object_bytes() {
     expected.extend_from_slice(&second);
     assert_eq!(get_bytes(&app, "/parts/big").await, expected);
 }
+
+/// Every byte differs from its neighbours, so a slice taken from the wrong place can't
+/// match by accident.
+fn patterned(size: usize) -> Vec<u8> {
+    (0..size as u64)
+        .map(|i| (i ^ (i >> 8) ^ (i >> 16)) as u8)
+        .collect()
+}
+
+async fn put_object(app: &TestApp, uri: &str, data: &[u8]) -> String {
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request("PUT", uri, data.to_vec()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    res.headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+fn with_header(mut request: Request<Body>, name: &'static str, value: &str) -> Request<Body> {
+    request.headers_mut().insert(name, value.parse().unwrap());
+    request
+}
+
+/// Requests each inclusive range and compares status, headers and exact bytes.
+async fn assert_ranges(app: &TestApp, uri: &str, data: &[u8], ranges: &[(usize, usize)]) {
+    let total = data.len();
+    for &(start, end) in ranges {
+        let value = format!("bytes={start}-{end}");
+        let request = with_header(req("GET", uri), "range", &value);
+        let res = app.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT, "{value}");
+        assert_eq!(
+            res.headers().get(header::CONTENT_RANGE).unwrap(),
+            &format!("bytes {start}-{end}/{total}"),
+            "{value}"
+        );
+        assert_eq!(
+            res.headers().get(header::CONTENT_LENGTH).unwrap(),
+            &(end - start + 1).to_string(),
+            "{value}"
+        );
+        assert_eq!(res.headers().get(header::ACCEPT_RANGES).unwrap(), "bytes");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(body == data[start..=end], "wrong bytes for {value}");
+    }
+}
+
+#[tokio::test]
+async fn ranges_return_exact_bytes_from_a_small_object() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    let data = patterned(1000);
+    put_object(&app, "/ranges/small", &data).await;
+
+    assert_ranges(
+        &app,
+        "/ranges/small",
+        &data,
+        &[(0, 0), (0, 999), (1, 998), (500, 500), (999, 999)],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ranges_return_exact_bytes_across_erasure_coded_stripes() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    // Stripes are 8 MiB, so this spans three of them.
+    const MIB: usize = 1024 * 1024;
+    let data = patterned(17 * MIB + 321);
+    put_object(&app, "/ranges/large", &data).await;
+
+    let mut ranges = vec![(0, data.len() - 1), (data.len() - 1, data.len() - 1)];
+    for boundary in [MIB, 8 * MIB, 16 * MIB] {
+        ranges.extend([
+            (boundary - 1, boundary - 1),
+            (boundary, boundary),
+            (boundary - 1, boundary),
+            (boundary - 5, boundary + 5),
+        ]);
+    }
+    ranges.push((123, 16 * MIB + 77));
+    assert_ranges(&app, "/ranges/large", &data, &ranges).await;
+}
+
+#[tokio::test]
+async fn ranges_return_exact_bytes_across_multipart_parts() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request("POST", "/ranges/parts?uploads", Vec::new()))
+        .await
+        .unwrap();
+    let upload_id = xml_tag(&body_string(res).await, "UploadId");
+
+    // A large part, a small replicated one, and another large one.
+    let sizes = [3 * 1024 * 1024 + 11, 1000, 2 * 1024 * 1024 + 7];
+    let data = patterned(sizes.iter().sum());
+    let mut complete = String::from("<CompleteMultipartUpload>");
+    let mut offset = 0;
+    for (index, size) in sizes.iter().enumerate() {
+        let number = index + 1;
+        let etag = put_object(
+            &app,
+            &format!("/ranges/parts?partNumber={number}&uploadId={upload_id}"),
+            &data[offset..offset + size],
+        )
+        .await;
+        complete.push_str(&format!(
+            "<Part><PartNumber>{number}</PartNumber><ETag>{etag}</ETag></Part>"
+        ));
+        offset += size;
+    }
+    complete.push_str("</CompleteMultipartUpload>");
+    let res = app
+        .router
+        .clone()
+        .oneshot(signed_request(
+            "POST",
+            &format!("/ranges/parts?uploadId={upload_id}"),
+            complete.into_bytes(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let first_end = sizes[0];
+    let second_end = sizes[0] + sizes[1];
+    assert_ranges(
+        &app,
+        "/ranges/parts",
+        &data,
+        &[
+            (0, data.len() - 1),
+            (first_end - 1, first_end),
+            (first_end, second_end - 1),
+            (first_end + 10, first_end + 20),
+            (second_end - 1, second_end),
+            (first_end - 100, second_end + 100),
+            (data.len() - 1, data.len() - 1),
+        ],
+    )
+    .await;
+
+    // The way clients actually read it: fixed-size pieces, reassembled.
+    let piece = 800 * 1024;
+    let mut rebuilt = Vec::new();
+    while rebuilt.len() < data.len() {
+        let start = rebuilt.len();
+        let end = (start + piece).min(data.len()) - 1;
+        let value = format!("bytes={start}-{end}");
+        let res = app
+            .router
+            .clone()
+            .oneshot(with_header(req("GET", "/ranges/parts"), "range", &value))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+        rebuilt.extend_from_slice(&res.into_body().collect().await.unwrap().to_bytes());
+    }
+    assert!(rebuilt == data, "reassembled pieces differ from the object");
+}
+
+#[tokio::test]
+async fn open_ended_and_suffix_ranges_are_resolved() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    let data = patterned(1000);
+    put_object(&app, "/ranges/file", &data).await;
+
+    for (value, expected, content_range) in [
+        ("bytes=990-", &data[990..], "bytes 990-999/1000"),
+        ("bytes=-10", &data[990..], "bytes 990-999/1000"),
+        ("bytes=-5000", &data[..], "bytes 0-999/1000"),
+        ("bytes=995-5000", &data[995..], "bytes 995-999/1000"),
+    ] {
+        let res = app
+            .router
+            .clone()
+            .oneshot(with_header(req("GET", "/ranges/file"), "range", value))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT, "{value}");
+        assert_eq!(
+            res.headers().get(header::CONTENT_RANGE).unwrap(),
+            content_range,
+            "{value}"
+        );
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(body == expected, "wrong bytes for {value}");
+    }
+}
+
+#[tokio::test]
+async fn an_unsatisfiable_range_is_refused_with_the_object_size() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    put_object(&app, "/ranges/file", &patterned(1000)).await;
+    put_object(&app, "/ranges/empty", &[]).await;
+
+    for (uri, value, size) in [
+        ("/ranges/file", "bytes=1000-", "1000"),
+        ("/ranges/file", "bytes=-0", "1000"),
+        ("/ranges/empty", "bytes=0-", "0"),
+    ] {
+        let res = app
+            .router
+            .clone()
+            .oneshot(with_header(req("GET", uri), "range", value))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::RANGE_NOT_SATISFIABLE, "{value}");
+        assert_eq!(
+            res.headers().get(header::CONTENT_RANGE).unwrap(),
+            &format!("bytes */{size}")
+        );
+        assert_eq!(xml_tag(&body_string(res).await, "Code"), "InvalidRange");
+    }
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req("GET", "/ranges/empty"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+}
+
+#[tokio::test]
+async fn a_range_it_cannot_honor_returns_the_whole_object() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    let data = patterned(1000);
+    put_object(&app, "/ranges/file", &data).await;
+
+    for value in ["bytes=0-1,5-6", "bytes=5-2", "items=0-5", "nonsense"] {
+        let res = app
+            .router
+            .clone()
+            .oneshot(with_header(req("GET", "/ranges/file"), "range", value))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{value}");
+        assert!(res.headers().get(header::CONTENT_RANGE).is_none());
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(body == data, "{value}");
+    }
+}
+
+#[tokio::test]
+async fn head_reports_ranges_without_a_body() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    put_object(&app, "/ranges/file", &patterned(1000)).await;
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(req("HEAD", "/ranges/file"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get(header::ACCEPT_RANGES).unwrap(), "bytes");
+    assert_eq!(res.headers().get(header::CONTENT_LENGTH).unwrap(), "1000");
+
+    let request = with_header(req("HEAD", "/ranges/file"), "range", "bytes=0-9");
+    let res = app.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(res.headers().get(header::CONTENT_LENGTH).unwrap(), "10");
+    assert_eq!(
+        res.headers().get(header::CONTENT_RANGE).unwrap(),
+        "bytes 0-9/1000"
+    );
+}
+
+#[tokio::test]
+async fn if_match_refuses_a_changed_object() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    let etag = put_object(&app, "/ranges/file", &patterned(1000)).await;
+
+    for good in [etag.as_str(), "*"] {
+        let request = with_header(req("GET", "/ranges/file"), "if-match", good);
+        let request = with_header(request, "range", "bytes=0-9");
+        let res = app.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT, "{good}");
+    }
+
+    put_object(&app, "/ranges/file", &patterned(2000)).await;
+
+    for method in ["GET", "HEAD"] {
+        let request = with_header(req(method, "/ranges/file"), "if-match", &etag);
+        let res = app.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PRECONDITION_FAILED, "{method}");
+    }
+}
+
+#[tokio::test]
+async fn if_range_sends_the_whole_object_once_it_has_changed() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    let etag = put_object(&app, "/ranges/file", &patterned(1000)).await;
+
+    let request = with_header(req("GET", "/ranges/file"), "range", "bytes=0-9");
+    let request = with_header(request, "if-range", &etag);
+    let res = app.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+
+    let changed = patterned(2000);
+    put_object(&app, "/ranges/file", &changed).await;
+
+    let request = with_header(req("GET", "/ranges/file"), "range", "bytes=0-9");
+    let request = with_header(request, "if-range", &etag);
+    let res = app.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert!(body == changed);
+}
+
+#[tokio::test]
+async fn a_presigned_url_honors_a_range() {
+    let app = test_app().await;
+    create_bucket(&app, "ranges").await;
+    let data = patterned(1000);
+    put_object(&app, "/ranges/file", &data).await;
+
+    let amz_date = loony_auth::amz_date_now();
+    let headers = vec![("host".to_string(), "localhost".to_string())];
+    let query = loony_auth::sign_presigned_query(
+        "GET",
+        "/ranges/file",
+        &headers,
+        &["host".to_string()],
+        ACCESS_KEY,
+        SECRET_KEY,
+        REGION,
+        &amz_date,
+        300,
+    );
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/ranges/file?{query}"))
+        .header("host", "localhost")
+        .header("range", "bytes=10-19")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert!(body == data[10..=19]);
+}

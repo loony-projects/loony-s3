@@ -10,4 +10,4 @@ mod stripe_reader;
 
 pub use bucket_service::BucketService;
 pub use error::Ls3Error;
-pub use object_service::{ListObjectsParams, ObjectService};
+pub use object_service::{ByteRange, ListObjectsParams, ObjectService};

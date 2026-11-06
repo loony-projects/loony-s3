@@ -7,8 +7,8 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use loony_auth::ChunkSigner;
-use loony_core::{BucketName, ObjectKey, UploadId};
-use loony_object::Ls3Error;
+use loony_core::{BucketName, ObjectKey, ObjectManifest, UploadId};
+use loony_object::{ByteRange, Ls3Error};
 
 use super::request_id;
 use crate::auth::AuthenticatedOwner;
@@ -73,6 +73,81 @@ fn user_metadata(headers: &HeaderMap) -> BTreeMap<String, String> {
         }
     }
     map
+}
+
+/// Parses a `Range` header. Anything but a single well-formed byte range gives `None`,
+/// which means serving the whole object: HTTP lets a server ignore a Range it can't honor,
+/// and the upstream protocol does the same for multiple ranges.
+fn parse_range(value: &str) -> Option<ByteRange> {
+    let spec = value.trim().strip_prefix("bytes=")?.trim();
+    if spec.contains(',') {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if start.is_empty() {
+        return digits(end).then(|| end.parse().ok().map(ByteRange::Suffix))?;
+    }
+    if !digits(start) {
+        return None;
+    }
+    let start = start.parse().ok()?;
+    if end.is_empty() {
+        return Some(ByteRange::From { start, end: None });
+    }
+    if !digits(end) {
+        return None;
+    }
+    let end = end.parse().ok()?;
+    (start <= end).then_some(ByteRange::From {
+        start,
+        end: Some(end),
+    })
+}
+
+fn header_text(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+/// `If-Match`: refuses the read if the object has changed. Clients downloading in pieces
+/// rely on this so a file replaced partway through can't end up mixed together.
+fn check_if_match(headers: &HeaderMap, manifest: &ObjectManifest) -> Result<(), Ls3Error> {
+    let Some(value) = header_text(headers, header::IF_MATCH) else {
+        return Ok(());
+    };
+    let current = xml::quoted_etag(&manifest.etag);
+    let matches = value
+        .split(',')
+        .map(str::trim)
+        .any(|candidate| candidate == "*" || candidate == current);
+    if matches {
+        Ok(())
+    } else {
+        Err(Ls3Error::PreconditionFailed)
+    }
+}
+
+/// `If-Range` says to apply `Range` only if the object is unchanged, and otherwise to send
+/// the whole new object. The value is either the ETag or the Last-Modified date.
+fn if_range_holds(headers: &HeaderMap, manifest: &ObjectManifest) -> bool {
+    header_text(headers, header::IF_RANGE).is_none_or(|value| {
+        let value = value.trim();
+        value == xml::quoted_etag(&manifest.etag) || value == http_date(manifest.created_at)
+    })
+}
+
+/// The inclusive byte range to serve, or `None` for the whole object.
+fn requested_range(
+    headers: &HeaderMap,
+    manifest: &ObjectManifest,
+) -> Result<Option<(u64, u64)>, Ls3Error> {
+    if !if_range_holds(headers, manifest) {
+        return Ok(None);
+    }
+    header_text(headers, header::RANGE)
+        .and_then(parse_range)
+        .map(|range| range.resolve(manifest.size))
+        .transpose()
 }
 
 /// Query parameters distinguishing a multipart operation from its plain-object
@@ -178,26 +253,50 @@ pub async fn get_object(
             .into_response());
     }
 
-    let (manifest, stream) = state
+    let manifest = state
         .objects
-        .get_object(&bucket_name, &object_key, owner.0)
+        .head_object(&bucket_name, &object_key, owner.0)
         .await
+        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource.clone())))?;
+    check_if_match(&headers, &manifest)
+        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource.clone())))?;
+    let range = requested_range(&headers, &manifest)
         .map_err(|e| ApiError::new(e, rid.clone(), Some(resource)))?;
 
-    let body = Body::from_stream(stream);
+    let (start, end) = range.unwrap_or((0, manifest.size.saturating_sub(1)));
+    // An empty object has no bytes to read, and `end` can't express that.
+    let body = if manifest.size == 0 {
+        Body::empty()
+    } else {
+        Body::from_stream(state.objects.read_range(&manifest, start, end))
+    };
+
     // Safe: every header value here comes from data already validated as a HeaderValue
     // once before (content_type was accepted via `.to_str()` on the way in) or is a
-    // value we constructed ourselves (ETag, Content-Length, Last-Modified) that is
-    // always ASCII.
-    let response = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, manifest.content_type)
-        .header(header::CONTENT_LENGTH, manifest.size)
+    // value we constructed ourselves (ETag, lengths, Last-Modified) that is always ASCII.
+    let mut response = Response::builder()
+        .status(if range.is_some() {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        })
+        .header(header::CONTENT_TYPE, &manifest.content_type)
+        .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ETAG, xml::quoted_etag(&manifest.etag))
-        .header(header::LAST_MODIFIED, http_date(manifest.created_at))
+        .header(header::LAST_MODIFIED, http_date(manifest.created_at));
+    response = match range {
+        Some((start, end)) => response
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{}", manifest.size),
+            ),
+        None => response.header(header::CONTENT_LENGTH, manifest.size),
+    };
+    Ok(response
         .body(body)
-        .expect("response built entirely from previously-validated header values");
-    Ok(response.into_response())
+        .expect("response built entirely from previously-validated header values")
+        .into_response())
 }
 
 pub async fn head_object(
@@ -208,22 +307,43 @@ pub async fn head_object(
 ) -> Result<Response, ApiError> {
     let rid = request_id(&headers);
     let (bucket_name, object_key) = parse_bucket_and_key(&bucket, &key, &rid)?;
+    let resource = format!("/{bucket}/{key}");
     let manifest = state
         .objects
         .head_object(&bucket_name, &object_key, owner.0)
         .await
-        .map_err(|e| ApiError::new(e, rid.clone(), Some(format!("/{bucket}/{key}"))))?;
+        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource.clone())))?;
+    check_if_match(&headers, &manifest)
+        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource.clone())))?;
+    let range = requested_range(&headers, &manifest)
+        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource)))?;
 
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, manifest.content_type),
-            (header::CONTENT_LENGTH, manifest.size.to_string()),
-            (header::ETAG, xml::quoted_etag(&manifest.etag)),
-            (header::LAST_MODIFIED, http_date(manifest.created_at)),
-        ],
-    )
-        .into_response())
+    let common = [
+        (header::CONTENT_TYPE, manifest.content_type.clone()),
+        (header::ACCEPT_RANGES, "bytes".to_string()),
+        (header::ETAG, xml::quoted_etag(&manifest.etag)),
+        (header::LAST_MODIFIED, http_date(manifest.created_at)),
+    ];
+    Ok(match range {
+        Some((start, end)) => (
+            StatusCode::PARTIAL_CONTENT,
+            common,
+            [
+                (header::CONTENT_LENGTH, (end - start + 1).to_string()),
+                (
+                    header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{}", manifest.size),
+                ),
+            ],
+        )
+            .into_response(),
+        None => (
+            StatusCode::OK,
+            common,
+            [(header::CONTENT_LENGTH, manifest.size.to_string())],
+        )
+            .into_response(),
+    })
 }
 
 pub async fn delete_object(
@@ -369,4 +489,40 @@ pub async fn post_object(
         rid,
         Some(resource),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_single_byte_ranges() {
+        let from = |start, end| Some(ByteRange::From { start, end });
+        assert_eq!(parse_range("bytes=0-99"), from(0, Some(99)));
+        assert_eq!(parse_range("bytes=5-5"), from(5, Some(5)));
+        assert_eq!(parse_range("bytes=100-"), from(100, None));
+        assert_eq!(parse_range("bytes=-20"), Some(ByteRange::Suffix(20)));
+        assert_eq!(parse_range("bytes=-0"), Some(ByteRange::Suffix(0)));
+    }
+
+    #[test]
+    fn anything_else_means_the_whole_object() {
+        for value in [
+            "",
+            "0-99",
+            "items=0-5",
+            "bytes=",
+            "bytes=-",
+            "bytes=a-b",
+            "bytes=5-2",
+            "bytes=0-1,5-6",
+            "bytes=+1-2",
+            "bytes=1-+2",
+            "bytes=-+2",
+            "bytes=99999999999999999999999-",
+            "bytes=-99999999999999999999999",
+        ] {
+            assert_eq!(parse_range(value), None, "{value:?}");
+        }
+    }
 }

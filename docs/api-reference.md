@@ -24,20 +24,22 @@ reference.
 | CompleteMultipartUpload | `POST /{bucket}/{key}?uploadId=X` | Body: `<CompleteMultipartUpload><Part><PartNumber>N</PartNumber><ETag>"..."</ETag></Part>...</CompleteMultipartUpload>`, parts in ascending order. Validated against recorded parts and committed atomically — same visibility mechanism as a plain PUT. |
 | AbortMultipartUpload | `DELETE /{bucket}/{key}?uploadId=X` | Idempotent. Already-written part shards become orphan-GC candidates (not yet implemented) rather than being deleted synchronously. |
 
+`GetObject` and `HeadObject` support a single byte range (`Range: bytes=0-99`, `bytes=100-`
+or `bytes=-100`), and `If-Match` and `If-Range`:
+
+- A satisfied range returns `206 Partial Content` with `Content-Range`, and reads only the
+  stripes it falls in.
+- A range starting past the end, or any range on an empty object, returns
+  `416 InvalidRange`.
+- Several ranges at once, or a malformed `Range`, return the whole object with `200`.
+- `If-Match` returns `412 PreconditionFailed` if the object has changed. `If-Range` returns
+  the whole object if it has changed.
+
 All routes are path-style (`http://host:port/{bucket}/{key}`); there is no
 virtual-hosted-style (`{bucket}.host`) routing.
 
 ## Not yet implemented
 
-- **Range requests** — the `Range` header on `GetObject` is silently ignored; the full
-  object is always returned rather than an error or a `206 Partial Content`. This means
-  any client that downloads large objects with parallel ranged GETs (many CLIs do,
-  above some size threshold, independent of multipart) will produce a corrupted local
-  file — each parallel request gets the *full* object instead of its slice. `aws s3 cp`
-  and boto3's `download_file` both do this by default: a 20 MiB object came back as a
-  36 MiB file in testing. Disable parallel downloads until Range support lands (e.g.
-  rclone's `--multi-thread-streams 0`), or use a single plain GET (boto3's `get_object`,
-  `aws s3api get-object`).
 - **`x-amz-meta-*` response headers** — user metadata given to `PutObject`/
   `CreateMultipartUpload` is stored and preserved correctly (round-trips through a
   multipart Complete too), but `GetObject`/`HeadObject` never echo it back as response
@@ -159,6 +161,8 @@ Errors are XML `<Error>` bodies matching the upstream protocol's shape and vocab
 | `BucketAlreadyExists` | 409 | |
 | `BucketNotEmpty` | 409 | `DeleteBucket` on a non-empty bucket |
 | `InvalidBucketName` | 400 | |
+| `InvalidRange` | 416 | |
+| `PreconditionFailed` | 412 | `If-Match` didn't match the object |
 | `BadDigest` | 400 | The body doesn't match its declared hash or checksum |
 | `IncompleteBody` | 400 | An `aws-chunked` body is malformed, cut short, or the wrong length |
 | `NotImplemented` | 501 | An upload body mode this server doesn't support |

@@ -53,8 +53,8 @@ Do this first, because every project's apps depend on it.
 - [x] Remove the outdated "There's no API to create additional credentials yet" line from
       `docs/api-reference.md`.
 - [ ] Deploy to the live server, which still runs the old code.
-- [ ] Decide whether `Range` support moves into this phase: `aws s3 cp` and boto3's
-      `download_file` download large files corrupted by default.
+- [x] Support `Range` requests, because `aws s3 cp` and boto3's `download_file` downloaded
+      large files corrupted by default. Also handle `If-Match` and `If-Range`.
 
 ## Phase 1: Sign in with Loony (server)
 
@@ -238,7 +238,6 @@ These steps change live services, so confirm each one first.
 
 - [ ] Read-only role and keys limited to one bucket.
 - [ ] Sending invites by email.
-- [ ] `Range` requests, which video seeking and parallel downloads need.
 - [ ] `DeleteObjects`, for bulk delete from SDKs.
 - [ ] Share links that outlast a temporary key.
 - [ ] Handling SIGTERM so `systemctl stop` drains requests.

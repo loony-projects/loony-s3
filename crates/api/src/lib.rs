@@ -7,8 +7,8 @@
 //! ListObjectsV2, all behind SigV4 (header + presigned) authentication and
 //! ownership-based authorization. Phase 10 adds CreateMultipartUpload/UploadPart/
 //! ListParts/CompleteMultipartUpload/AbortMultipartUpload as query-param variants of
-//! the same `/{bucket}/{key}` route (prompt §51). No Range requests yet, no versioning
-//! query params yet — each is a later, separately-scoped phase.
+//! the same `/{bucket}/{key}` route (prompt §51). No versioning query params yet — a
+//! later, separately-scoped phase.
 
 mod auth;
 mod error;
@@ -81,6 +81,8 @@ pub fn build_router(state: AppState) -> Router {
                 .allow_headers(Any)
                 .expose_headers([
                     HeaderName::from_static("etag"),
+                    HeaderName::from_static("accept-ranges"),
+                    HeaderName::from_static("content-range"),
                     HeaderName::from_static("x-amz-request-id"),
                 ]),
         )

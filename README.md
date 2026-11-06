@@ -73,10 +73,8 @@ recorded `RecordPart` history (rejecting out-of-order or mismatched-ETag parts w
 same `InvalidPart`/`InvalidPartOrder` codes the upstream protocol uses) and commits the concatenated
 result with a single `CommitManifest` — the same atomic-visibility boundary a normal
 PUT already uses, not a separate protocol. Verified against a real `loony-server` process
-with a standard client's low-level single-request commands (its high-level copy
-command's *download* side uses concurrent HTTP Range requests above a size threshold,
-which this server doesn't support yet — a pre-existing, already-documented gap, not something
-multipart introduced): a 3-part, 12 MiB upload round-trips byte-identical, and the
+with a standard client's low-level single-request commands: a 3-part, 12 MiB upload
+round-trips byte-identical, and the
 `InvalidPart`/`InvalidPartOrder`/`NoSuchUpload` error paths all return the correct LS3
 error codes.
 
@@ -90,7 +88,7 @@ forwarding the request. PUT (and each multipart part) still requires every plann
 shard write to succeed; there's no partial-write-quorum/abort semantics from
 architecture.md §11 and no degraded-write healing-job enqueueing from §12-14 yet.
 Internal RPC auth is still a bearer token, not the mTLS the architecture doc commits to
-for production. HTTP Range requests, object versioning, and `x-amz-meta-*` response
+for production. Object versioning and `x-amz-meta-*` response
 headers on GET/HEAD (user metadata is stored and preserved correctly through PUT and
 multipart, just never echoed back yet — a pre-existing gap, not new to Phase 10) all
 remain unimplemented.

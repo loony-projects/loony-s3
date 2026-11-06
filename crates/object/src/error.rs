@@ -35,6 +35,10 @@ pub enum Ls3Error {
     SignatureDoesNotMatch,
     #[error("not implemented: {0}")]
     NotImplemented(String),
+    #[error("the requested range is not satisfiable for an object of {size} bytes")]
+    InvalidRange { size: u64 },
+    #[error("a precondition on the request did not hold")]
+    PreconditionFailed,
 
     #[error("metadata store error: {0}")]
     Meta(#[from] MetaError),

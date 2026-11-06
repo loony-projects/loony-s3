@@ -549,6 +549,34 @@ impl ObjectService {
         Ok((manifest, boxed))
     }
 
+    /// Streams the bytes from `start` to `end` inclusive, fetching only the stripes
+    /// they fall in. Callers get `manifest` from [`Self::head_object`], which is what
+    /// authorizes the read, and clamp the range to its size with [`ByteRange::resolve`].
+    pub fn read_range(&self, manifest: &ObjectManifest, start: u64, end: u64) -> ShardBytesOut {
+        let stripes = stripes_in_range(manifest, start, end);
+        let shard_store = self.shard_store.clone();
+
+        Box::pin(futures::stream::unfold(
+            (stripes.into_iter(), shard_store),
+            |(mut iter, shard_store)| async move {
+                let (stripe, skip, take) = iter.next()?;
+                let result = fetch_and_reconstruct_stripe(&shard_store, &stripe)
+                    .await
+                    .and_then(|bytes| {
+                        let bytes = Bytes::from(bytes);
+                        let wanted = skip..skip + take;
+                        if wanted.end > bytes.len() {
+                            return Err(std::io::Error::other(
+                                "a stripe is shorter than its manifest says",
+                            ));
+                        }
+                        Ok(bytes.slice(wanted))
+                    });
+                Some((result, (iter, shard_store)))
+            },
+        ))
+    }
+
     pub async fn head_object(
         &self,
         bucket: &BucketName,
@@ -603,6 +631,58 @@ impl ObjectService {
                 other => other.into(),
             })
     }
+}
+
+/// A byte range as a client asked for it, before the object's size is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByteRange {
+    /// `bytes=start-` or `bytes=start-end`, inclusive.
+    From { start: u64, end: Option<u64> },
+    /// `bytes=-n`: the last `n` bytes.
+    Suffix(u64),
+}
+
+impl ByteRange {
+    /// The inclusive first and last byte this selects from an object of `size` bytes. An
+    /// `end` past the object is clamped to its last byte, as HTTP requires.
+    pub fn resolve(self, size: u64) -> Result<(u64, u64), Ls3Error> {
+        let unsatisfiable = Ls3Error::InvalidRange { size };
+        if size == 0 {
+            return Err(unsatisfiable);
+        }
+        match self {
+            ByteRange::From { start, end } => {
+                if start >= size {
+                    return Err(unsatisfiable);
+                }
+                Ok((start, end.map_or(size - 1, |end| end.min(size - 1))))
+            }
+            ByteRange::Suffix(0) => Err(unsatisfiable),
+            ByteRange::Suffix(count) => Ok((size.saturating_sub(count), size - 1)),
+        }
+    }
+}
+
+/// The stripes holding bytes `start..=end`, each with how many bytes to skip and take.
+/// Positions are added up from the stripes' lengths, so they hold across multipart
+/// objects, where each part's stripes restart their own offsets.
+fn stripes_in_range(manifest: &ObjectManifest, start: u64, end: u64) -> Vec<(Stripe, usize, usize)> {
+    let mut selected = Vec::new();
+    let mut position = 0u64;
+    for stripe in manifest.parts.iter().flat_map(|part| &part.stripes) {
+        let stripe_start = position;
+        position += stripe.stripe_len;
+        if stripe.stripe_len == 0 || position <= start {
+            continue;
+        }
+        if stripe_start > end {
+            break;
+        }
+        let skip = start.saturating_sub(stripe_start);
+        let last = end.min(position - 1) - stripe_start;
+        selected.push((stripe.clone(), skip as usize, (last - skip + 1) as usize));
+    }
+    selected
 }
 
 /// Translates the multipart-specific [`MetaError`] variants (prompt §57's `NoSuchUpload`/
@@ -704,6 +784,36 @@ async fn fetch_and_verify_shard(
 
 #[cfg(test)]
 mod tests {
+    use super::ByteRange;
+
+    #[test]
+    fn byte_ranges_resolve_against_the_object_size() {
+        let from = |start, end| ByteRange::From { start, end };
+        assert_eq!(from(0, Some(9)).resolve(100).unwrap(), (0, 9));
+        assert_eq!(from(90, None).resolve(100).unwrap(), (90, 99));
+        assert_eq!(from(90, Some(5000)).resolve(100).unwrap(), (90, 99));
+        assert_eq!(from(99, Some(99)).resolve(100).unwrap(), (99, 99));
+        assert_eq!(ByteRange::Suffix(10).resolve(100).unwrap(), (90, 99));
+        assert_eq!(ByteRange::Suffix(5000).resolve(100).unwrap(), (0, 99));
+    }
+
+    #[test]
+    fn unsatisfiable_byte_ranges_are_refused() {
+        let from = |start, end| ByteRange::From { start, end };
+        for (range, size) in [
+            (from(100, None), 100),
+            (from(5000, Some(6000)), 100),
+            (ByteRange::Suffix(0), 100),
+            (from(0, None), 0),
+            (ByteRange::Suffix(5), 0),
+        ] {
+            assert!(matches!(
+                range.resolve(size),
+                Err(crate::Ls3Error::InvalidRange { .. })
+            ));
+        }
+    }
+
     use super::*;
     use loony_metadata::{CreateBucket, RedbMetadataStore};
     use loony_storage::LocalVolumeManager;
