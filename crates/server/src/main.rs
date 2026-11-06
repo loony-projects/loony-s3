@@ -487,6 +487,9 @@ async fn seed_root_credential(
             owner_id,
             enabled: true,
             admin: true,
+            kind: loony_metadata::CredentialKind::Standard,
+            user_id: None,
+            expires_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await?;

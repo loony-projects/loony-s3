@@ -11,8 +11,9 @@ use axum::middleware::Next;
 use axum::response::Response;
 use time::{Duration, OffsetDateTime};
 
-use loony_auth::{RequestParts, verify};
+use loony_auth::{AuthError, RequestParts, verify};
 use loony_core::OwnerId;
+use loony_metadata::CredentialKind;
 
 use crate::error::auth_error_response;
 use crate::handlers::request_id;
@@ -60,6 +61,9 @@ pub async fn sigv4_auth(
     )
     .await
     {
+        Ok(verified) if verified.kind != CredentialKind::Standard => {
+            auth_error_response(AuthError::WrongCredentialKind, rid)
+        }
         Ok(verified) => {
             request
                 .extensions_mut()

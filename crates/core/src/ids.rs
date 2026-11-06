@@ -113,6 +113,12 @@ define_uuid_id!(
     "Identity of one in-progress multipart upload (architecture.md §27)."
 );
 define_uuid_id!(
+    UserId,
+    "A person who signs in through the identity provider. Separate from [`OwnerId`], \
+     which is what owns buckets."
+);
+
+define_uuid_id!(
     OwnerId,
     "Identity of the account/principal that owns buckets and credentials."
 );

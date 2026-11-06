@@ -6,7 +6,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use loony_core::{
-    BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId, VolumeId,
+    BucketId, BucketName, ETag, NodeId, ObjectKey, OwnerId, PartManifest, UploadId, UserId,
+    VolumeId,
 };
 use time::OffsetDateTime;
 
@@ -106,8 +107,73 @@ pub struct Credential {
     /// root credential is re-seeded at startup.
     #[serde(default)]
     pub admin: bool,
+    #[serde(default)]
+    pub kind: CredentialKind,
+    /// The signed-in user this key was issued to. `None` for keys an admin created.
+    #[serde(default)]
+    pub user_id: Option<UserId>,
+    /// When this key stops working. `None` means it doesn't expire.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+impl Credential {
+    pub fn is_expired(&self, now: OffsetDateTime) -> bool {
+        self.expires_at.is_some_and(|expires_at| now >= expires_at)
+    }
+}
+
+/// What a key is allowed to be used for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialKind {
+    /// A normal key, for the LS3 API. Every key written before this field existed.
+    #[default]
+    Standard,
+    /// Proves who is signed in to the web console. Refused by the LS3 API, so a login
+    /// session can never own or touch buckets by itself.
+    UserSession,
+}
+
+/// Someone who has signed in through the identity provider. The account itself, with its
+/// password, lives in the identity provider: this holds what LS3 needs to know about them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct User {
+    pub user_id: UserId,
+    /// Who vouches for this user: `issuer` and `subject` together are the stable identity,
+    /// since an email address can change.
+    pub issuer: String,
+    pub subject: String,
+    pub email: Option<String>,
+    pub email_verified: bool,
+    pub name: Option<String>,
+    /// Whether an admin has blocked this user from LS3.
+    pub enabled: bool,
+    /// Whether an admin has approved this user to create projects.
+    pub can_create_projects: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_sign_in_at: OffsetDateTime,
+}
+
+/// What the identity provider said about someone who just signed in.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserSignIn {
+    pub issuer: String,
+    pub subject: String,
+    pub email: Option<String>,
+    pub email_verified: bool,
+    pub name: Option<String>,
+}
+
+/// What an admin controls about a user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UserAccess {
+    pub enabled: bool,
+    pub can_create_projects: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

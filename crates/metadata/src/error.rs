@@ -28,6 +28,9 @@ pub enum MetaError {
     #[error("the continuation token is not valid")]
     InvalidContinuationToken,
 
+    #[error("user {0} does not exist")]
+    NoSuchUser(String),
+
     #[error("node {0} is not registered in this cluster")]
     NoSuchNode(String),
 

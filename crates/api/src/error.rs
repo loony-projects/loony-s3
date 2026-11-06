@@ -159,6 +159,16 @@ pub fn auth_error_response(error: AuthError, request_id: String) -> Response {
             "AccessDenied",
             "This credential is disabled".into(),
         ),
+        AuthError::CredentialExpired => (
+            StatusCode::BAD_REQUEST,
+            "ExpiredToken",
+            "This credential has expired".into(),
+        ),
+        AuthError::WrongCredentialKind => (
+            StatusCode::FORBIDDEN,
+            "AccessDenied",
+            "This credential can't be used with the LS3 API".into(),
+        ),
         AuthError::SignatureMismatch | AuthError::InvalidCredentialScope => (
             StatusCode::FORBIDDEN,
             "SignatureDoesNotMatch",

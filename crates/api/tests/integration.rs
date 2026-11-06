@@ -44,6 +44,9 @@ async fn test_app() -> TestApp {
             owner_id,
             enabled: true,
             admin: false,
+            kind: Default::default(),
+            user_id: None,
+            expires_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await
@@ -328,6 +331,9 @@ async fn a_different_credential_cannot_touch_someone_elses_bucket() {
             owner_id: OwnerId::new(),
             enabled: true,
             admin: false,
+            kind: Default::default(),
+            user_id: None,
+            expires_at: None,
             created_at: time::OffsetDateTime::now_utc(),
         })
         .await
@@ -1663,4 +1669,58 @@ async fn a_presigned_url_honors_a_range() {
     assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
     let body = res.into_body().collect().await.unwrap().to_bytes();
     assert!(body == data[10..=19]);
+}
+
+#[tokio::test]
+async fn a_console_session_key_cannot_use_the_ls3_api() {
+    let app = test_app().await;
+    app.metadata
+        .put_credential(Credential {
+            access_key: "LS3SESSION".to_string(),
+            secret_key: "session-secret".to_string(),
+            owner_id: OwnerId::new(),
+            enabled: true,
+            admin: false,
+            kind: loony_metadata::CredentialKind::UserSession,
+            user_id: Some(loony_core::UserId::new()),
+            expires_at: None,
+            created_at: time::OffsetDateTime::now_utc(),
+        })
+        .await
+        .unwrap();
+
+    for (method, uri) in [("GET", "/"), ("PUT", "/session-bucket"), ("GET", "/session-bucket")] {
+        let request = signed_request_with("LS3SESSION", "session-secret", method, uri, Vec::new());
+        assert_eq!(
+            status_and_code(&app, request).await,
+            (StatusCode::FORBIDDEN, "AccessDenied".to_string()),
+            "{method} {uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_expired_key_stops_working() {
+    let app = test_app().await;
+    let now = time::OffsetDateTime::now_utc();
+    app.metadata
+        .put_credential(Credential {
+            access_key: "LS3EXPIRED".to_string(),
+            secret_key: "expired-secret".to_string(),
+            owner_id: OwnerId::new(),
+            enabled: true,
+            admin: false,
+            kind: Default::default(),
+            user_id: None,
+            expires_at: Some(now - time::Duration::seconds(1)),
+            created_at: now - time::Duration::hours(1),
+        })
+        .await
+        .unwrap();
+
+    let request = signed_request_with("LS3EXPIRED", "expired-secret", "GET", "/", Vec::new());
+    assert_eq!(
+        status_and_code(&app, request).await,
+        (StatusCode::BAD_REQUEST, "ExpiredToken".to_string())
+    );
 }

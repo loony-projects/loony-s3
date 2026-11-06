@@ -10,8 +10,10 @@ use crate::canonical::{
     canonical_uri, compute_signature, constant_time_eq, parse_query_string, sha256_hex,
 };
 use crate::credential::CredentialProvider;
+use crate::credential::SigningCredential;
 use crate::streaming::{ChunkSigner, STREAMING_PREFIX};
-use loony_core::OwnerId;
+use loony_core::{OwnerId, UserId};
+use loony_metadata::CredentialKind;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum AuthError {
@@ -31,6 +33,10 @@ pub enum AuthError {
     UnknownAccessKey,
     #[error("credential is disabled")]
     CredentialDisabled,
+    #[error("credential has expired")]
+    CredentialExpired,
+    #[error("this kind of credential can't be used here")]
+    WrongCredentialKind,
     #[error("the request signature does not match")]
     SignatureMismatch,
     #[error("credential scope does not match the expected region/service")]
@@ -41,6 +47,8 @@ pub enum AuthError {
 pub struct VerifiedRequest {
     pub access_key: String,
     pub owner_id: OwnerId,
+    pub kind: CredentialKind,
+    pub user_id: Option<UserId>,
     /// Set when the request declares a streaming payload: `verify` only covers the
     /// headers, so the body's chunk signatures still have to be checked as it arrives.
     pub chunk_signer: Option<ChunkSigner>,
@@ -73,6 +81,16 @@ pub async fn verify(
     } else {
         verify_header(parts, &query_pairs, region, credentials, now, max_skew).await
     }
+}
+
+fn check_usable(cred: &SigningCredential, now: OffsetDateTime) -> Result<(), AuthError> {
+    if !cred.enabled {
+        return Err(AuthError::CredentialDisabled);
+    }
+    if cred.expires_at.is_some_and(|expires_at| now >= expires_at) {
+        return Err(AuthError::CredentialExpired);
+    }
+    Ok(())
 }
 
 fn header_value(headers: &[(String, String)], name: &str) -> Option<String> {
@@ -220,9 +238,7 @@ async fn verify_header(
         .get_secret(&parsed.access_key)
         .await
         .ok_or(AuthError::UnknownAccessKey)?;
-    if !cred.enabled {
-        return Err(AuthError::CredentialDisabled);
-    }
+    check_usable(&cred, now)?;
 
     let payload_hash = header_value(parts.headers, "x-amz-content-sha256")
         .unwrap_or_else(|| "UNSIGNED-PAYLOAD".to_string());
@@ -266,6 +282,8 @@ async fn verify_header(
     Ok(VerifiedRequest {
         access_key: parsed.access_key,
         owner_id: cred.owner_id,
+        kind: cred.kind,
+        user_id: cred.user_id,
         chunk_signer,
     })
 }
@@ -324,9 +342,7 @@ async fn verify_presigned(
         .get_secret(&access_key)
         .await
         .ok_or(AuthError::UnknownAccessKey)?;
-    if !cred.enabled {
-        return Err(AuthError::CredentialDisabled);
-    }
+    check_usable(&cred, now)?;
 
     // Everything in the query string is part of what's signed *except* the signature
     // itself.
@@ -361,6 +377,8 @@ async fn verify_presigned(
     Ok(VerifiedRequest {
         access_key,
         owner_id: cred.owner_id,
+        kind: cred.kind,
+        user_id: cred.user_id,
         chunk_signer: None,
     })
 }
@@ -378,6 +396,7 @@ mod tests {
         secret_key: &'static str,
         owner_id: OwnerId,
         enabled: bool,
+        expires_at: Option<OffsetDateTime>,
         calls: Mutex<Vec<String>>,
     }
 
@@ -390,6 +409,9 @@ mod tests {
                     secret_key: self.secret_key.to_string(),
                     owner_id: self.owner_id,
                     enabled: self.enabled,
+                    kind: CredentialKind::Standard,
+                    user_id: None,
+                    expires_at: self.expires_at,
                 })
             } else {
                 None
@@ -403,6 +425,7 @@ mod tests {
             secret_key: "test-secret-key",
             owner_id: OwnerId::new(),
             enabled,
+            expires_at: None,
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -773,5 +796,66 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err, AuthError::SignatureMismatch);
+    }
+
+    #[tokio::test]
+    async fn rejects_an_expired_credential_and_accepts_it_before_then() {
+        let mut creds = creds(true);
+        creds.expires_at = Some(datetime!(2025-01-01 12:00:00 UTC));
+        let headers = sign_header_request(
+            "GET",
+            "/bucket/key",
+            "",
+            &[("host", "ls3.example.com")],
+            "AKIATEST",
+            "test-secret-key",
+            "us-east-1",
+            "20250101T115900Z",
+            "UNSIGNED-PAYLOAD",
+        );
+        let parts = RequestParts {
+            method: "GET",
+            path: "/bucket/key",
+            query: "",
+            headers: &headers,
+        };
+
+        let at = |now| verify(&parts, "us-east-1", &creds, now, Duration::minutes(15));
+        assert!(at(datetime!(2025-01-01 11:59:59 UTC)).await.is_ok());
+        for now in [
+            datetime!(2025-01-01 12:00:00 UTC),
+            datetime!(2025-01-01 12:00:01 UTC),
+        ] {
+            assert_eq!(at(now).await.unwrap_err(), AuthError::CredentialExpired);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_presigned_url_stops_working_when_its_credential_expires() {
+        let mut creds = creds(true);
+        creds.expires_at = Some(datetime!(2025-01-01 12:30:00 UTC));
+        let query = sign_presigned_url(
+            "GET",
+            "/bucket/key",
+            "AKIATEST",
+            "test-secret-key",
+            "us-east-1",
+            "20250101T120000Z",
+            7200,
+        );
+        let headers = vec![("host".to_string(), "ls3.example.com".to_string())];
+        let parts = RequestParts {
+            method: "GET",
+            path: "/bucket/key",
+            query: &query,
+            headers: &headers,
+        };
+
+        let at = |now| verify(&parts, "us-east-1", &creds, now, Duration::minutes(15));
+        assert!(at(datetime!(2025-01-01 12:29:00 UTC)).await.is_ok());
+        assert_eq!(
+            at(datetime!(2025-01-01 12:31:00 UTC)).await.unwrap_err(),
+            AuthError::CredentialExpired
+        );
     }
 }

@@ -11,11 +11,14 @@ use std::io::Cursor;
 
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, PartManifest, UploadId, VersionId,
+    ObjectManifest, PartManifest, UploadId, VersionId, UserId,
 };
 use time::OffsetDateTime;
 
-use crate::commands::{BeginMultipart, CompleteMultipart, CreateBucket, Credential, RegisterNode};
+use crate::commands::{
+    BeginMultipart, CompleteMultipart, CreateBucket, Credential, RegisterNode, User, UserAccess,
+    UserSignIn,
+};
 use crate::error::MetaError;
 
 /// A [`MetadataCommand`] must be applied deterministically: every voter/learner runs
@@ -37,6 +40,16 @@ pub struct ResolvedCreateBucket {
     pub bucket_id: BucketId,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+/// `user_id` only takes effect the first time this issuer and subject are seen, so two
+/// simultaneous first sign-ins still end up as one user.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedUserSignIn {
+    pub sign_in: UserSignIn,
+    pub user_id: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -71,6 +84,8 @@ pub enum MetadataCommand {
     AbortMultipart(UploadId),
     PutCredential(Box<Credential>),
     DeleteCredential(String),
+    RecordUserSignIn(Box<ResolvedUserSignIn>),
+    SetUserAccess(UserId, UserAccess),
     BootstrapCluster(ClusterId),
     RegisterNode(RegisterNode),
     UpdateNodeState(NodeId, NodeState),
@@ -86,6 +101,7 @@ pub enum CommandResponse {
     Manifest(Box<ObjectManifest>),
     UploadId(UploadId),
     NodeInfo(Box<NodeInfo>),
+    User(Box<User>),
     Unit,
 }
 

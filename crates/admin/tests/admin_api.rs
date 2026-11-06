@@ -62,6 +62,9 @@ impl App {
                     owner_id,
                     enabled: true,
                     admin,
+                    kind: Default::default(),
+                    user_id: None,
+                    expires_at: None,
                     created_at: OffsetDateTime::now_utc(),
                 })
                 .await

@@ -10,7 +10,7 @@ mod state_machine;
 mod store;
 #[cfg(test)]
 mod tests;
-mod types;
+pub(crate) mod types;
 
 pub use network::NoopNetworkFactory;
 pub use store::{RaftMetadataStore, RaftStatus};

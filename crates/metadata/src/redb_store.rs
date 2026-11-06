@@ -16,17 +16,19 @@ use md5::{Digest as _, Md5};
 use redb::{Database, ReadableTable, TableDefinition};
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectId,
-    ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState,
+    ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState, UserId,
 };
 use sha2::Sha256;
 use time::OffsetDateTime;
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode, StorageStats,
+    MultipartUploadState, ObjectSummary, PartSummary, RegisterNode, StorageStats, User, UserAccess,
+    UserSignIn,
 };
 use crate::error::MetaError;
 use crate::raft::applier;
+use crate::raft::types::ResolvedUserSignIn;
 use crate::store::MetadataStore;
 
 const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
@@ -68,6 +70,8 @@ impl RedbMetadataStore {
             write_txn.open_table(OBJECTS).map_err(db_err)?;
             write_txn.open_table(MULTIPART).map_err(db_err)?;
             write_txn.open_table(CREDENTIALS).map_err(db_err)?;
+            write_txn.open_table(applier::USERS).map_err(db_err)?;
+            write_txn.open_table(applier::USER_SUBJECTS).map_err(db_err)?;
             write_txn.open_table(NODES).map_err(db_err)?;
             write_txn.open_table(CLUSTER).map_err(db_err)?;
             write_txn.commit().map_err(db_err)?;
@@ -194,6 +198,33 @@ impl MetadataStore for RedbMetadataStore {
     async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError> {
         let access_key = access_key.to_string();
         self.blocking(move |db| applier::delete_credential(db, &access_key))
+            .await
+    }
+
+    async fn record_user_sign_in(&self, sign_in: UserSignIn) -> Result<User, MetaError> {
+        let resolved = ResolvedUserSignIn {
+            sign_in,
+            user_id: UserId::new(),
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| applier::record_user_sign_in(db, resolved))
+            .await
+    }
+
+    async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError> {
+        self.blocking(move |db| applier::get_user(db, user_id)).await
+    }
+
+    async fn list_users(&self) -> Result<Vec<User>, MetaError> {
+        self.blocking(applier::list_users).await
+    }
+
+    async fn set_user_access(
+        &self,
+        user_id: UserId,
+        access: UserAccess,
+    ) -> Result<User, MetaError> {
+        self.blocking(move |db| applier::set_user_access(db, user_id, access))
             .await
     }
 
@@ -1133,6 +1164,9 @@ mod tests {
             owner_id: OwnerId::new(),
             enabled: true,
             admin: false,
+            kind: Default::default(),
+            user_id: None,
+            expires_at: None,
             created_at: OffsetDateTime::now_utc(),
         };
         store.put_credential(cred.clone()).await.unwrap();
@@ -1325,6 +1359,9 @@ mod tests {
             owner_id: OwnerId::new(),
             enabled: true,
             admin: false,
+            kind: Default::default(),
+            user_id: None,
+            expires_at: None,
             created_at: OffsetDateTime::now_utc(),
         };
         store.put_credential(cred).await.unwrap();
@@ -1342,5 +1379,24 @@ mod tests {
             OwnerId::new()
         );
         assert!(!serde_json::from_str::<Credential>(&json).unwrap().admin);
+    }
+
+    #[test]
+    fn a_credential_stored_before_these_fields_existed_is_a_standard_key_that_never_expires() {
+        let json = r#"{"access_key":"A","secret_key":"S","owner_id":"00000000-0000-7000-8000-000000000000","enabled":true,"created_at":"2025-01-01T00:00:00Z"}"#;
+        let credential = serde_json::from_str::<Credential>(json).unwrap();
+        assert_eq!(credential.kind, crate::commands::CredentialKind::Standard);
+        assert_eq!(credential.user_id, None);
+        assert_eq!(credential.expires_at, None);
+        assert!(!credential.is_expired(OffsetDateTime::now_utc()));
+    }
+
+    #[test]
+    fn a_credential_is_expired_from_its_expiry_onward() {
+        let json = r#"{"access_key":"A","secret_key":"S","owner_id":"00000000-0000-7000-8000-000000000000","enabled":true,"expires_at":"2025-01-01T12:00:00Z","created_at":"2025-01-01T00:00:00Z"}"#;
+        let credential = serde_json::from_str::<Credential>(json).unwrap();
+        let expiry = credential.expires_at.unwrap();
+        assert!(!credential.is_expired(expiry - time::Duration::seconds(1)));
+        assert!(credential.is_expired(expiry));
     }
 }

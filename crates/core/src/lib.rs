@@ -14,7 +14,8 @@ pub use bucket::{Bucket, BucketName, InvalidBucketName, VersioningState};
 pub use cluster::{ClusterId, InvalidClusterId, NodeInfo, NodeState};
 pub use etag::ETag;
 pub use ids::{
-    BucketId, IdParseError, NodeId, ObjectId, OwnerId, ShardId, UploadId, VersionId, VolumeId,
+    BucketId, IdParseError, NodeId, ObjectId, OwnerId, ShardId, UploadId, UserId, VersionId,
+    VolumeId,
 };
 pub use manifest::{DurabilityPolicy, ObjectManifest, PartManifest, ShardLocation, Stripe};
 pub use object_key::{InvalidObjectKey, ObjectKey};

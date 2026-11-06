@@ -5,8 +5,9 @@
 //! satisfies it, with no adapter boilerplate at the call site.
 
 use async_trait::async_trait;
-use loony_core::OwnerId;
-use loony_metadata::MetadataStore;
+use loony_core::{OwnerId, UserId};
+use loony_metadata::{CredentialKind, MetadataStore};
+use time::OffsetDateTime;
 
 /// What SigV4 verification needs about one credential. Deliberately not the full
 /// `loony_metadata::Credential` record (no `access_key`/`created_at` here) — this is the
@@ -16,6 +17,9 @@ pub struct SigningCredential {
     pub secret_key: String,
     pub owner_id: OwnerId,
     pub enabled: bool,
+    pub kind: CredentialKind,
+    pub user_id: Option<UserId>,
+    pub expires_at: Option<OffsetDateTime>,
 }
 
 #[async_trait]
@@ -31,6 +35,9 @@ impl<T: MetadataStore + ?Sized> CredentialProvider for T {
             secret_key: cred.secret_key,
             owner_id: cred.owner_id,
             enabled: cred.enabled,
+            kind: cred.kind,
+            user_id: cred.user_id,
+            expires_at: cred.expires_at,
         })
     }
 }

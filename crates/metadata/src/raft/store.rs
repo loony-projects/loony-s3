@@ -18,12 +18,12 @@ use openraft::{BasicNode, Config, Raft};
 use redb::Database;
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, OwnerId, PartManifest, UploadId, VersionId,
+    ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, UserId,
 };
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, PartSummary, RegisterNode, StorageStats,
+    MultipartUploadState, PartSummary, RegisterNode, StorageStats, User, UserAccess, UserSignIn,
 };
 use crate::error::MetaError;
 use crate::raft::applier::{self, db_err};
@@ -31,7 +31,7 @@ use crate::raft::log_store::RedbLogStore;
 use crate::raft::state_machine::RedbStateMachineStore;
 use crate::raft::types::{
     CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
-    ResolvedCreateBucket, TypeConfig,
+    ResolvedCreateBucket, ResolvedUserSignIn, TypeConfig,
 };
 use crate::store::MetadataStore;
 
@@ -345,6 +345,37 @@ impl MetadataStore for RaftMetadataStore {
     async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError> {
         self.write(MetadataCommand::DeleteCredential(access_key.to_string())).await?;
         Ok(())
+    }
+
+    async fn record_user_sign_in(&self, sign_in: UserSignIn) -> Result<User, MetaError> {
+        let resolved = ResolvedUserSignIn {
+            sign_in,
+            user_id: UserId::new(),
+            at: time::OffsetDateTime::now_utc(),
+        };
+        match self.write(MetadataCommand::RecordUserSignIn(Box::new(resolved))).await? {
+            CommandResponse::User(user) => Ok(*user),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError> {
+        self.read(move |db| applier::get_user(db, user_id)).await
+    }
+
+    async fn list_users(&self) -> Result<Vec<User>, MetaError> {
+        self.read(applier::list_users).await
+    }
+
+    async fn set_user_access(
+        &self,
+        user_id: UserId,
+        access: UserAccess,
+    ) -> Result<User, MetaError> {
+        match self.write(MetadataCommand::SetUserAccess(user_id, access)).await? {
+            CommandResponse::User(user) => Ok(*user),
+            _ => Err(unexpected_response()),
+        }
     }
 
     async fn bootstrap_cluster(&self, cluster_id: ClusterId) -> Result<(), MetaError> {

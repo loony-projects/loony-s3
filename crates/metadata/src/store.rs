@@ -6,12 +6,12 @@
 use async_trait::async_trait;
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectKey,
-    ObjectManifest, OwnerId, UploadId,
+    ObjectManifest, OwnerId, UploadId, UserId,
 };
 
 use crate::commands::{
     BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    MultipartUploadState, PartSummary, RegisterNode, StorageStats,
+    MultipartUploadState, PartSummary, RegisterNode, StorageStats, User, UserAccess, UserSignIn,
 };
 use crate::error::MetaError;
 use loony_core::PartManifest;
@@ -62,6 +62,15 @@ pub trait MetadataStore: Send + Sync {
     async fn list_credentials(&self) -> Result<Vec<Credential>, MetaError>;
     /// Idempotent: deleting an unknown access key is not an error.
     async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError>;
+
+    /// Records a sign-in: creates the user the first time this issuer and subject are
+    /// seen, and otherwise refreshes what the identity provider said about them, leaving
+    /// what an admin controls ([`UserAccess`]) alone.
+    async fn record_user_sign_in(&self, sign_in: UserSignIn) -> Result<User, MetaError>;
+    async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError>;
+    async fn list_users(&self) -> Result<Vec<User>, MetaError>;
+    async fn set_user_access(&self, user_id: UserId, access: UserAccess)
+    -> Result<User, MetaError>;
 
     /// Sets this store's cluster identity if it doesn't have one yet; idempotent (and
     /// safe to call again with the same id) once it does. Errors with

@@ -22,19 +22,23 @@ use time::OffsetDateTime;
 
 use crate::commands::{
     Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
-    RegisterNode, StorageStats,
+    RegisterNode, StorageStats, User, UserAccess,
 };
 use crate::error::MetaError;
 use crate::raft::types::{
     CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
-    ResolvedCreateBucket,
+    ResolvedCreateBucket, ResolvedUserSignIn,
 };
-use loony_core::PartManifest;
+use loony_core::{PartManifest, UserId};
 
 pub(crate) const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
 pub(crate) const OBJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("objects");
 pub(crate) const MULTIPART: TableDefinition<&str, &[u8]> = TableDefinition::new("multipart_uploads");
 pub(crate) const CREDENTIALS: TableDefinition<&str, &[u8]> = TableDefinition::new("credentials");
+pub(crate) const USERS: TableDefinition<&str, &[u8]> = TableDefinition::new("users");
+/// `issuer\0subject` to the user's id, so a sign-in can find the user it belongs to.
+pub(crate) const USER_SUBJECTS: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("user_subjects");
 pub(crate) const NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("nodes");
 pub(crate) const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
 pub(crate) const CLUSTER_ID_KEY: &str = "cluster_id";
@@ -42,7 +46,7 @@ pub(crate) const CLUSTER_ID_KEY: &str = "cluster_id";
 /// Every business-data table the state machine owns — used to open/create them upfront
 /// and to enumerate them wholesale for snapshotting (`snapshot.rs`).
 pub(crate) const ALL_TABLES: &[TableDefinition<'static, &'static str, &'static [u8]>] =
-    &[BUCKETS, OBJECTS, MULTIPART, CREDENTIALS, NODES, CLUSTER];
+    &[BUCKETS, OBJECTS, MULTIPART, CREDENTIALS, USERS, USER_SUBJECTS, NODES, CLUSTER];
 
 pub(crate) fn db_err<E: std::fmt::Display>(e: E) -> MetaError {
     MetaError::Db(e.to_string())
@@ -87,6 +91,12 @@ pub(crate) fn apply_metadata_command(
         MetadataCommand::PutCredential(cred) => put_credential(db, *cred).map(|_| CommandResponse::Unit),
         MetadataCommand::DeleteCredential(access_key) => {
             delete_credential(db, &access_key).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::RecordUserSignIn(resolved) => {
+            record_user_sign_in(db, *resolved).map(|u| CommandResponse::User(Box::new(u)))
+        }
+        MetadataCommand::SetUserAccess(user_id, access) => {
+            set_user_access(db, user_id, access).map(|u| CommandResponse::User(Box::new(u)))
         }
         MetadataCommand::BootstrapCluster(id) => bootstrap_cluster(db, id).map(|_| CommandResponse::Unit),
         MetadataCommand::RegisterNode(cmd) => register_node(db, cmd).map(|n| CommandResponse::NodeInfo(Box::new(n))),
@@ -572,6 +582,108 @@ pub(crate) fn delete_credential(db: &Database, access_key: &str) -> Result<(), M
     }
     write_txn.commit().map_err(db_err)?;
     Ok(())
+}
+
+pub(crate) fn record_user_sign_in(
+    db: &Database,
+    resolved: ResolvedUserSignIn,
+) -> Result<User, MetaError> {
+    let ResolvedUserSignIn { sign_in, user_id, at } = resolved;
+    let subject_key = format!("{}\0{}", sign_in.issuer, sign_in.subject);
+
+    let write_txn = db.begin_write().map_err(db_err)?;
+    let user = {
+        let mut subjects = write_txn.open_table(USER_SUBJECTS).map_err(db_err)?;
+        let mut users = write_txn.open_table(USERS).map_err(db_err)?;
+
+        let existing: Option<UserId> = match subjects.get(subject_key.as_str()).map_err(db_err)? {
+            Some(guard) => Some(serde_json::from_slice(guard.value())?),
+            None => None,
+        };
+        let user = match existing {
+            Some(existing) => {
+                let stored = users
+                    .get(existing.to_string().as_str())
+                    .map_err(db_err)?
+                    .ok_or_else(|| MetaError::NoSuchUser(existing.to_string()))?;
+                let mut user: User = serde_json::from_slice(stored.value())?;
+                drop(stored);
+                user.email = sign_in.email;
+                user.email_verified = sign_in.email_verified;
+                user.name = sign_in.name;
+                user.last_sign_in_at = at;
+                user
+            }
+            None => {
+                let id_bytes = serde_json::to_vec(&user_id)?;
+                subjects
+                    .insert(subject_key.as_str(), id_bytes.as_slice())
+                    .map_err(db_err)?;
+                User {
+                    user_id,
+                    issuer: sign_in.issuer,
+                    subject: sign_in.subject,
+                    email: sign_in.email,
+                    email_verified: sign_in.email_verified,
+                    name: sign_in.name,
+                    enabled: true,
+                    can_create_projects: false,
+                    created_at: at,
+                    last_sign_in_at: at,
+                }
+            }
+        };
+        let bytes = serde_json::to_vec(&user)?;
+        users
+            .insert(user.user_id.to_string().as_str(), bytes.as_slice())
+            .map_err(db_err)?;
+        user
+    };
+    write_txn.commit().map_err(db_err)?;
+    Ok(user)
+}
+
+pub(crate) fn get_user(db: &Database, user_id: UserId) -> Result<Option<User>, MetaError> {
+    let read_txn = db.begin_read().map_err(db_err)?;
+    let table = read_txn.open_table(USERS).map_err(db_err)?;
+    match table.get(user_id.to_string().as_str()).map_err(db_err)? {
+        Some(guard) => Ok(Some(serde_json::from_slice(guard.value())?)),
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn list_users(db: &Database) -> Result<Vec<User>, MetaError> {
+    let read_txn = db.begin_read().map_err(db_err)?;
+    let table = read_txn.open_table(USERS).map_err(db_err)?;
+    let mut result = Vec::new();
+    for entry in table.iter().map_err(db_err)? {
+        let (_key, value) = entry.map_err(db_err)?;
+        result.push(serde_json::from_slice(value.value())?);
+    }
+    Ok(result)
+}
+
+pub(crate) fn set_user_access(
+    db: &Database,
+    user_id: UserId,
+    access: UserAccess,
+) -> Result<User, MetaError> {
+    let write_txn = db.begin_write().map_err(db_err)?;
+    let user = {
+        let mut table = write_txn.open_table(USERS).map_err(db_err)?;
+        let key = user_id.to_string();
+        let mut user: User = match table.get(key.as_str()).map_err(db_err)? {
+            Some(guard) => serde_json::from_slice(guard.value())?,
+            None => return Err(MetaError::NoSuchUser(key)),
+        };
+        user.enabled = access.enabled;
+        user.can_create_projects = access.can_create_projects;
+        let bytes = serde_json::to_vec(&user)?;
+        table.insert(key.as_str(), bytes.as_slice()).map_err(db_err)?;
+        user
+    };
+    write_txn.commit().map_err(db_err)?;
+    Ok(user)
 }
 
 pub(crate) fn bootstrap_cluster(db: &Database, cluster_id: ClusterId) -> Result<(), MetaError> {

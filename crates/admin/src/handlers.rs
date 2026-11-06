@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use loony_core::{BucketName, NodeId, NodeState, OwnerId};
-use loony_metadata::{Credential, ListObjectsQuery, MetadataStore};
+use loony_metadata::{Credential, CredentialKind, ListObjectsQuery, MetadataStore};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -89,7 +89,7 @@ struct Totals {
 
 pub async fn overview(State(state): State<AdminState>) -> Result<Json<Overview>> {
     let buckets = state.metadata.list_all_buckets().await?;
-    let credentials = state.metadata.list_credentials().await?;
+    let credentials = standard_credentials(&state).await?;
     let stats = state.metadata.storage_stats().await?;
     let nodes = state.metadata.list_nodes().await?;
     let raft = state.metadata.raft_status();
@@ -402,8 +402,16 @@ impl From<Credential> for CredentialView {
     }
 }
 
-pub async fn list_credentials(State(state): State<AdminState>) -> Result<Json<Vec<CredentialView>>> {
+/// Leaves out the short-lived keys behind web console sign-ins: they come and go on their
+/// own, and an operator has no use for them in a list of keys.
+async fn standard_credentials(state: &AdminState) -> Result<Vec<Credential>> {
     let mut credentials = state.metadata.list_credentials().await?;
+    credentials.retain(|c| c.kind == CredentialKind::Standard);
+    Ok(credentials)
+}
+
+pub async fn list_credentials(State(state): State<AdminState>) -> Result<Json<Vec<CredentialView>>> {
+    let mut credentials = standard_credentials(&state).await?;
     credentials.sort_by_key(|c| std::cmp::Reverse(c.created_at));
     Ok(Json(credentials.into_iter().map(Into::into).collect()))
 }
@@ -451,6 +459,9 @@ pub async fn create_credential(
             owner_id,
             enabled: true,
             admin: false,
+            kind: CredentialKind::Standard,
+            user_id: None,
+            expires_at: None,
             created_at: OffsetDateTime::now_utc(),
         };
         state.metadata.put_credential(credential.clone()).await?;
