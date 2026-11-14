@@ -37,13 +37,24 @@ export function CallbackPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const signIn = useConsoleStore((s) => s.signIn);
+  const clearSession = useConsoleStore((s) => s.clear);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let current = true;
     const code = params.get('code');
     if (!code) {
-      setError(params.get('error') === 'access_denied' ? 'Sign-in was cancelled.' : 'Sign-in failed. Please try again.');
+      // The pending sign-in is used up either way, so an old one can't be completed later.
+      const transaction = takeTransaction();
+      const ours = transaction !== null && transaction.state === params.get('state');
+      if (ours && params.get('error') === 'access_denied') {
+        // Pressing Cancel on the consent screen isn't a failure: back to signing in.
+        clearSession('Sign-in was cancelled.');
+        navigate('/login', { replace: true, state: { from: safeReturnTo(transaction.returnTo) } });
+        return;
+      }
+      const stale = !ours && params.get('state') !== null;
+      setError(stale ? 'This sign-in link is out of date or was opened in a different tab. Please start again.' : 'Sign-in failed. Please try again.');
       return;
     }
     exchange(code, params.get('state'))
@@ -61,7 +72,7 @@ export function CallbackPage() {
     return () => {
       current = false;
     };
-  }, [params, navigate, signIn]);
+  }, [params, navigate, signIn, clearSession]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">

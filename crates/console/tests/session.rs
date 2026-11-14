@@ -55,6 +55,10 @@ struct IdpState {
     jwks_requests: u32,
     seen_forms: Vec<HashMap<String, String>>,
     fail_token_endpoint: bool,
+    /// Refresh tokens handed out, as loony-auth does for apps allowed the refresh grant.
+    issued_refresh: Vec<String>,
+    revoked: Vec<String>,
+    fail_revoke: bool,
 }
 
 #[derive(Clone)]
@@ -91,12 +95,40 @@ async fn token_endpoint(
     }
     let token = form.get("code").and_then(|code| state.codes.remove(code));
     match token {
-        Some(token) => (StatusCode::OK, Json(json!({"id_token": token}))),
+        Some(token) => {
+            let refresh = format!("refresh-{}", state.issued_refresh.len() + 1);
+            state.issued_refresh.push(refresh.clone());
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "access_token": "unused-access-token",
+                    "token_type": "Bearer",
+                    "expires_in": 900,
+                    "refresh_token": refresh,
+                    "id_token": token,
+                    "scope": "openid profile email",
+                })),
+            )
+        }
         None => (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "invalid_grant"})),
         ),
     }
+}
+
+async fn revoke_endpoint(
+    State(idp): State<FakeIdp>,
+    Form(form): Form<HashMap<String, String>>,
+) -> StatusCode {
+    let mut state = idp.state.lock().unwrap();
+    if state.fail_revoke {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    if let Some(token) = form.get("token") {
+        state.revoked.push(token.clone());
+    }
+    StatusCode::OK
 }
 
 async fn jwks_endpoint(State(idp): State<FakeIdp>) -> Json<Value> {
@@ -121,6 +153,7 @@ impl FakeIdp {
         };
         let router = Router::new()
             .route("/oauth/token", post(token_endpoint))
+            .route("/oauth/revoke", post(revoke_endpoint))
             .route("/.well-known/jwks.json", get(jwks_endpoint))
             .with_state(idp.clone());
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -1018,4 +1051,22 @@ async fn a_wrong_clock_is_not_reported_as_being_signed_out() {
     let (status, _, body) = send(&h.router, request).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["code"], "clock_skew");
+}
+
+#[tokio::test]
+async fn refresh_tokens_are_revoked_straight_after_signing_in() {
+    let h = harness().await;
+    let body = h.sign_in().await;
+    assert!(body.get("refresh_token").is_none(), "{body}");
+    let state = h.idp.state.lock().unwrap();
+    assert_eq!(state.issued_refresh, vec!["refresh-1".to_string()]);
+    assert_eq!(state.revoked, state.issued_refresh);
+}
+
+#[tokio::test]
+async fn a_failed_revoke_does_not_stop_the_sign_in() {
+    let h = harness().await;
+    h.idp.state.lock().unwrap().fail_revoke = true;
+    let body = h.sign_in().await;
+    assert!(body["access_key"].is_string(), "{body}");
 }

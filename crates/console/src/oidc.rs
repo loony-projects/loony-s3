@@ -42,6 +42,9 @@ pub struct IdentityClaims {
 #[derive(Deserialize)]
 struct TokenResponse {
     id_token: Option<String>,
+    /// Never kept: sessions renew by signing in again, so this is revoked straight away.
+    #[serde(default)]
+    refresh_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,6 +70,7 @@ pub struct OidcClient {
     http: reqwest::Client,
     issuer: String,
     token_url: String,
+    revoke_url: String,
     jwks_url: String,
     client_id: String,
     client_secret: String,
@@ -100,6 +104,7 @@ impl OidcClient {
                 .build()?,
             issuer: config.issuer.clone(),
             token_url: format!("{base}/oauth/token"),
+            revoke_url: format!("{base}/oauth/revoke"),
             jwks_url: format!("{base}/.well-known/jwks.json"),
             client_id: config.client_id.clone(),
             client_secret: config.client_secret.clone(),
@@ -156,9 +161,36 @@ impl OidcClient {
             tracing::warn!(error = %err.without_url(), "unreadable token response");
             OidcError::Unavailable
         })?;
+        if let Some(refresh_token) = &tokens.refresh_token {
+            self.revoke(refresh_token).await;
+        }
         tokens
             .id_token
             .ok_or(OidcError::Rejected("the provider returned no ID token"))
+    }
+
+    /// Revokes a refresh token this server will never use. A failure is only logged: the
+    /// sign-in itself is fine, and the token was never stored anywhere.
+    async fn revoke(&self, refresh_token: &str) {
+        let result = self
+            .http
+            .post(&self.revoke_url)
+            .basic_auth(&self.client_id, Some(&self.client_secret))
+            .form(&[
+                ("token", refresh_token),
+                ("token_type_hint", "refresh_token"),
+            ])
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                tracing::warn!(status = %response.status(), "the provider refused to revoke a refresh token");
+            }
+            Err(err) => {
+                tracing::warn!(error = %err.without_url(), "couldn't revoke a refresh token");
+            }
+        }
     }
 
     async fn verify_id_token(&self, token: &str, nonce: &str) -> Result<IdentityClaims, OidcError> {
