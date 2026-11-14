@@ -130,6 +130,27 @@ pub struct ResolvedCreateProject {
     pub at: OffsetDateTime,
 }
 
+/// Re-links `into` (the user from before an identity provider reset) to the identity
+/// `from` signed in with, merging `from` into it. See `raft/accounts.rs`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedRelinkUser {
+    pub from: UserId,
+    pub into: UserId,
+    /// Who asked, for the ledger entry if credit moves.
+    pub actor: String,
+    pub entry_id: LedgerEntryId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedMakeOwner {
+    pub project_id: ProjectId,
+    pub user_id: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedAdoptOwner {
     pub cmd: AdoptOwner,
@@ -222,6 +243,8 @@ pub enum MetadataCommand {
     CompleteCheckout(Box<ResolvedCompleteCheckout>),
     /// Builds usage counters and indexes from the data, once, for data stored before them.
     RebuildDerivedIndexes,
+    RelinkUser(Box<ResolvedRelinkUser>),
+    MakeProjectOwner(Box<ResolvedMakeOwner>),
     BootstrapCluster(ClusterId),
     RegisterNode(RegisterNode),
     UpdateNodeState(NodeId, NodeState),

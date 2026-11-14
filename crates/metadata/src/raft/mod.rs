@@ -2,6 +2,9 @@
 //! `redb_store.rs` implements directly for the pre-Raft single-voter case (see this
 //! crate's top-level `lib.rs` doc and architecture.md §5).
 
+pub(crate) mod accounts;
+#[cfg(test)]
+mod accounts_tests;
 pub(crate) mod applier;
 pub(crate) mod billing_apply;
 #[cfg(test)]

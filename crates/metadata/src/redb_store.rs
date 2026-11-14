@@ -575,6 +575,37 @@ impl MetadataStore for RedbMetadataStore {
             .await
     }
 
+    async fn relink_user(
+        &self,
+        from: UserId,
+        into: UserId,
+        actor: String,
+    ) -> Result<User, MetaError> {
+        let resolved = crate::raft::types::ResolvedRelinkUser {
+            from,
+            into,
+            actor,
+            entry_id: loony_core::LedgerEntryId::new(),
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| crate::raft::accounts::relink_user(db, resolved))
+            .await
+    }
+
+    async fn make_project_owner(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+    ) -> Result<ProjectMember, MetaError> {
+        let resolved = crate::raft::types::ResolvedMakeOwner {
+            project_id,
+            user_id,
+            at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| crate::raft::accounts::make_project_owner(db, resolved))
+            .await
+    }
+
     async fn list_buckets(&self, owner: OwnerId) -> Result<Vec<Bucket>, MetaError> {
         self.blocking(move |db| {
             let read_txn = db.begin_read().map_err(db_err)?;

@@ -80,6 +80,21 @@ pub trait MetadataStore: Send + Sync {
     /// working, because they belong to the project.
     async fn set_user_access(&self, user_id: UserId, access: UserAccess)
     -> Result<User, MetaError>;
+    /// Merges `from`, a user created after the identity provider was reset, into `into`, the
+    /// same person from before: `into` takes `from`'s identity, memberships and credit, and
+    /// `from` is deleted. Refused unless [`crate::relink_refusal`] allows it. Admin only.
+    async fn relink_user(
+        &self,
+        from: UserId,
+        into: UserId,
+        actor: String,
+    ) -> Result<User, MetaError>;
+    /// Makes `user_id` an Owner of the project, adding them if needed. Admin only.
+    async fn make_project_owner(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+    ) -> Result<ProjectMember, MetaError>;
 
     /// Creates the project with `created_by` as its Owner. Fails with
     /// [`MetaError::ProjectLimitReached`] past `max_created`.

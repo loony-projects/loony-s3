@@ -73,6 +73,10 @@ pub enum MetaError {
     #[error("that checkout doesn't exist")]
     NoSuchCheckout,
 
+    /// Re-linking two users was refused, with why. Only an admin sees this.
+    #[error("can't re-link these users: {0}")]
+    CannotRelink(String),
+
     #[error("project {0} does not exist")]
     NoSuchProject(String),
 

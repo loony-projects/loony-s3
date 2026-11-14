@@ -500,6 +500,94 @@ pub async fn update_user(
     audited(&state, &actor, "user.update", &target, result).await
 }
 
+/// A user from before an identity provider reset, and the one the same person got after it.
+#[derive(Serialize)]
+pub struct RelinkCandidate {
+    /// The newer user, which is merged away.
+    from: UserView,
+    /// The older user, which keeps its projects and takes the new identity.
+    into: UserView,
+}
+
+/// Pairs an admin could re-link: see `loony_metadata::relink_candidates`. Changes nothing.
+pub async fn list_relink_candidates(
+    State(state): State<AdminState>,
+) -> Result<Json<Vec<RelinkCandidate>>> {
+    let users = state.metadata.list_users().await?;
+    Ok(Json(
+        loony_metadata::relink_candidates(&users)
+            .into_iter()
+            .map(|(from, into)| RelinkCandidate {
+                from: from.into(),
+                into: into.into(),
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct RelinkRequest {
+    from_user_id: UserId,
+    into_user_id: UserId,
+}
+
+/// Re-links one pair. Never happens on its own: only when an admin asks, one pair at a time.
+pub async fn relink_user(
+    State(state): State<AdminState>,
+    Extension(actor): Extension<Actor>,
+    Json(request): Json<RelinkRequest>,
+) -> Result<Json<UserView>> {
+    let target = format!(
+        "user:{} into user:{}",
+        request.from_user_id, request.into_user_id
+    );
+    let result = async {
+        Ok(Json(
+            state
+                .metadata
+                .relink_user(
+                    request.from_user_id,
+                    request.into_user_id,
+                    format!("admin:{}", actor.0),
+                )
+                .await?
+                .into(),
+        ))
+    }
+    .await;
+    audited(&state, &actor, "user.relink", &target, result).await
+}
+
+#[derive(Deserialize)]
+pub struct MakeOwnerRequest {
+    user_id: UserId,
+}
+
+/// For a project whose Owners can't act any more, such as after deleting their Loony account.
+pub async fn make_project_owner(
+    State(state): State<AdminState>,
+    Extension(actor): Extension<Actor>,
+    Path(project_id): Path<ProjectId>,
+    Json(request): Json<MakeOwnerRequest>,
+) -> Result<Json<ProjectMemberView>> {
+    let target = format!("project:{project_id} user:{}", request.user_id);
+    let result = async {
+        let member = state
+            .metadata
+            .make_project_owner(project_id, request.user_id)
+            .await?;
+        let user = state.metadata.get_user(member.user_id).await?;
+        Ok(Json(ProjectMemberView {
+            user_id: member.user_id,
+            email: user.as_ref().and_then(|u| u.email.clone()),
+            name: user.and_then(|u| u.name),
+            role: member.role,
+        }))
+    }
+    .await;
+    audited(&state, &actor, "project.make_owner", &target, result).await
+}
+
 #[derive(Serialize)]
 pub struct ProjectMemberView {
     user_id: UserId,

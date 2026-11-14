@@ -53,6 +53,15 @@ pub fn build_router(state: AdminState) -> Router {
         )
         .route("/admin/v1/users", get(handlers::list_users))
         .route("/admin/v1/users/:user_id", patch(handlers::update_user))
+        .route(
+            "/admin/v1/users/relink-candidates",
+            get(handlers::list_relink_candidates),
+        )
+        .route("/admin/v1/users/relink", post(handlers::relink_user))
+        .route(
+            "/admin/v1/projects/:project_id/owners",
+            post(handlers::make_project_owner),
+        )
         .route("/admin/v1/projects", get(handlers::list_projects))
         .route(
             "/admin/v1/projects/:project_id",

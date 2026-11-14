@@ -9,6 +9,8 @@ import { formatBytes, formatDate, formatUsage } from '@/lib/format';
 import { SubscriptionBadge } from '@/components/SubscriptionPanel';
 import { AdminPageState, Badge, PageHeader, ShortId, Table, dangerButton, errorMessage, secondaryButton, useAdminAction, useAdminData } from './shared';
 
+const control = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500';
+
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 const person = (member: AdminProject['members'][number]) => member.email ?? member.name ?? member.user_id;
@@ -34,7 +36,6 @@ function AdoptModal({ owners, onClose, onAdopted }: { owners: AdoptableOwner[]; 
     }
   }
 
-  const control = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500';
 
   return (
     <Modal
@@ -84,6 +85,60 @@ function AdoptModal({ owners, onClose, onAdopted }: { owners: AdoptableOwner[]; 
   );
 }
 
+function MakeOwnerModal({ project, onClose, onDone }: { project: AdminProject; onClose: () => void; onDone: () => void }) {
+  const users = useAdminData(adminApi.users);
+  const [userId, setUserId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+  const owners = new Set(project.members.filter((m) => m.role === 'owner').map((m) => m.user_id));
+  const choices = (users.data ?? []).filter((user) => user.enabled && !owners.has(user.id));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const member = await adminApi.makeProjectOwner(project.id, userId);
+      toast.success(`${member.email ?? member.name ?? 'They'} can now manage ${project.name}`);
+      onDone();
+    } catch (err) {
+      toast.error(errorMessage(err, 'Could not change the Owners'));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Add an Owner to ${project.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+          <button form="owner-form" type="submit" disabled={saving || !userId} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium rounded-lg transition-colors">
+            {saving && <Spinner size="sm" />} Make Owner
+          </button>
+        </>
+      }
+    >
+      <form id="owner-form" onSubmit={(e) => void submit(e)} className="space-y-4">
+        <div>
+          <label htmlFor="owner-user" className="block text-sm font-medium text-gray-700 mb-1.5">Person</label>
+          <select id="owner-user" value={userId} onChange={(e) => setUserId(e.target.value)} className={control}>
+            <option value="">Choose someone</option>
+            {choices.map((user) => (
+              <option key={user.id} value={user.id}>{user.email ?? user.name ?? user.id}</option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-xs text-gray-500">Only people who have signed in at least once are listed.</p>
+        </div>
+        <p className="text-xs text-gray-500">
+          For a project whose Owners can't look after it any more, for example after deleting their Loony account. They join the project if
+          they aren't in it, and can then manage its members, keys and subscription. Nobody is removed.
+        </p>
+      </form>
+    </Modal>
+  );
+}
+
 export function ProjectsPage() {
   const { data, error, loading, reload: reloadProjects } = useAdminData(adminApi.projects);
   const owners = useAdminData(adminApi.adoptableOwners);
@@ -93,6 +148,7 @@ export function ProjectsPage() {
   };
   const { busy, run } = useAdminAction(reload);
   const [adopting, setAdopting] = useState(false);
+  const [addingOwner, setAddingOwner] = useState<AdminProject | null>(null);
 
   function toggle(project: AdminProject) {
     const warning =
@@ -115,7 +171,7 @@ export function ProjectsPage() {
       </PageHeader>
       <AdminPageState error={error} loading={loading} hasData={data !== null}>
         {data && data.length === 0 ? (
-          <EmptyState icon={<FolderKanban className="w-16 h-16" />} title="No projects yet" description="Approve someone under Users, and they can create one." />
+          <EmptyState icon={<FolderKanban className="w-16 h-16" />} title="No projects yet" description="Projects appear here once someone who has signed in creates one." />
         ) : (
           data && (
             <Table headers={['Project', 'Status', 'Subscription', 'Members', 'Access keys', 'Buckets', 'Objects', 'Storage', 'Created', '']}>
@@ -144,10 +200,15 @@ export function ProjectsPage() {
                   <td className="px-4 py-3 tabular-nums text-gray-700">{project.objects.toLocaleString()}</td>
                   <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap">{formatUsage(project.bytes, project.limit_bytes)}</td>
                   <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(project.created_at)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button className={project.enabled ? dangerButton : secondaryButton} disabled={busy !== null} onClick={() => toggle(project)}>
-                      {project.enabled ? 'Disable' : 'Enable'}
-                    </button>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end gap-2">
+                      <button className={secondaryButton} disabled={busy !== null} onClick={() => setAddingOwner(project)}>
+                        Add Owner
+                      </button>
+                      <button className={project.enabled ? dangerButton : secondaryButton} disabled={busy !== null} onClick={() => toggle(project)}>
+                        {project.enabled ? 'Disable' : 'Enable'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -156,6 +217,16 @@ export function ProjectsPage() {
         )}
       </AdminPageState>
 
+      {addingOwner && (
+        <MakeOwnerModal
+          project={addingOwner}
+          onClose={() => setAddingOwner(null)}
+          onDone={() => {
+            setAddingOwner(null);
+            void reload();
+          }}
+        />
+      )}
       {adopting && owners.data && (
         <AdoptModal
           owners={owners.data}

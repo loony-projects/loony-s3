@@ -31,6 +31,7 @@ pub use commands::{
     ProjectRole, RegisterNode, StorageStats, User, UserAccess, UserSignIn,
 };
 pub use error::MetaError;
+pub use raft::accounts::{relink_candidates, relink_refusal};
 pub use raft::{
     CommandResponse, CommandResult, MetadataCommand, NoopNetworkFactory, Raft, RaftMetadataStore,
     RaftStatus, TypeConfig,

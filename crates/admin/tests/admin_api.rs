@@ -1128,3 +1128,120 @@ async fn gift_codes_are_shown_once_listed_with_redemptions_and_can_be_disabled()
         "the code never reaches the audit log"
     );
 }
+
+async fn signed_in(app: &App, subject: &str, email: &str) -> loony_metadata::User {
+    app.store
+        .record_user_sign_in(loony_metadata::UserSignIn {
+            issuer: "https://issuer.example".into(),
+            subject: subject.into(),
+            email: Some(email.into()),
+            email_verified: true,
+            name: Some(subject.into()),
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn users_split_by_an_identity_reset_are_relinked_only_when_an_admin_asks() {
+    let app = App::new().await;
+    let old = signed_in(&app, "old-sub", "bob@example.com").await;
+    let project = app
+        .store
+        .create_project(loony_metadata::CreateProject {
+            name: "Bob's".into(),
+            created_by: old.user_id,
+            max_created: 10,
+        })
+        .await
+        .unwrap();
+    let new = signed_in(&app, "new-sub", "bob@example.com").await;
+    signed_in(&app, "carol", "carol@example.com").await;
+
+    let (status, pairs) = app
+        .admin("GET", "/admin/v1/users/relink-candidates", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pairs.as_array().unwrap().len(), 1, "{pairs}");
+    assert_eq!(pairs[0]["from"]["id"], new.user_id.to_string());
+    assert_eq!(pairs[0]["into"]["id"], old.user_id.to_string());
+    // Looking changed nothing.
+    assert_eq!(app.store.list_users().await.unwrap().len(), 3);
+
+    let (status, merged) = app
+        .admin(
+            "POST",
+            "/admin/v1/users/relink",
+            Some(json!({"from_user_id": new.user_id, "into_user_id": old.user_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{merged}");
+    assert_eq!(merged["id"], old.user_id.to_string());
+    let again = signed_in(&app, "new-sub", "bob@example.com").await;
+    assert_eq!(again.user_id, old.user_id);
+    let members = app.store.list_members(project.project_id).await.unwrap();
+    assert_eq!(members[0].user_id, old.user_id);
+
+    // Done once; the same pair again, or a pair that doesn't match, is refused.
+    let (status, _) = app
+        .admin(
+            "POST",
+            "/admin/v1/users/relink",
+            Some(json!({"from_user_id": new.user_id, "into_user_id": old.user_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let carol = app
+        .store
+        .list_users()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|u| u.subject == "carol")
+        .unwrap();
+    let (status, body) = app
+        .admin(
+            "POST",
+            "/admin/v1/users/relink",
+            Some(json!({"from_user_id": carol.user_id, "into_user_id": old.user_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let audit = app.audit_contents();
+    assert_eq!(audit.matches("user.relink").count(), 3);
+}
+
+#[tokio::test]
+async fn an_admin_can_give_a_project_a_new_owner() {
+    let app = App::new().await;
+    let gone = signed_in(&app, "gone", "gone@example.com").await;
+    let helper = signed_in(&app, "helper", "helper@example.com").await;
+    let project = app
+        .store
+        .create_project(loony_metadata::CreateProject {
+            name: "Orphan".into(),
+            created_by: gone.user_id,
+            max_created: 10,
+        })
+        .await
+        .unwrap();
+
+    let path = format!("/admin/v1/projects/{}/owners", project.project_id);
+    let (status, member) = app
+        .admin("POST", &path, Some(json!({"user_id": helper.user_id})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{member}");
+    assert_eq!(member["role"], "owner");
+    assert_eq!(member["email"], "helper@example.com");
+
+    let (status, _) = app
+        .admin(
+            "POST",
+            &path,
+            Some(json!({"user_id": loony_core::UserId::new()})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(app.audit_contents().contains("project.make_owner"));
+}

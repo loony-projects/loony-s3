@@ -128,6 +128,12 @@ export interface AdminUser {
   last_sign_in_at: string;
 }
 
+/** A user from before an identity provider reset, and the one the same person got after. */
+export interface RelinkCandidate {
+  from: AdminUser;
+  into: AdminUser;
+}
+
 export interface AdminProject {
   id: string;
   name: string;
@@ -177,6 +183,11 @@ export const adminApi = {
 
   updateUser: (id: string, change: { enabled?: boolean }) =>
     adminRequest<AdminUser>('PATCH', `/users/${id}`, { json: change }),
+  relinkCandidates: () => adminRequest<RelinkCandidate[]>('GET', '/users/relink-candidates'),
+  relinkUser: (fromUserId: string, intoUserId: string) =>
+    adminRequest<AdminUser>('POST', '/users/relink', { json: { from_user_id: fromUserId, into_user_id: intoUserId } }),
+  makeProjectOwner: (projectId: string, userId: string) =>
+    adminRequest<AdminProject['members'][number]>('POST', `/projects/${projectId}/owners`, { json: { user_id: userId } }),
 
   projects: () => adminRequest<AdminProject[]>('GET', '/projects'),
   setProjectEnabled: (id: string, enabled: boolean) => adminRequest<AdminProject>('PATCH', `/projects/${id}`, { json: { enabled } }),

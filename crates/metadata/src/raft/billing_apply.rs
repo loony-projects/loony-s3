@@ -258,7 +258,7 @@ fn ledger_key(user: UserId, at: OffsetDateTime, entry_id: LedgerEntryId) -> Stri
 
 /// Changes a balance and records why, in one step. A debit larger than the balance is
 /// refused, so a balance never goes below zero.
-fn change_balance(
+pub(crate) fn change_balance(
     txn: &WriteTransaction,
     user: UserId,
     amount: i64,

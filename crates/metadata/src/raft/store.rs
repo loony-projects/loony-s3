@@ -870,6 +870,47 @@ impl MetadataStore for RaftMetadataStore {
         }
     }
 
+    async fn relink_user(
+        &self,
+        from: UserId,
+        into: UserId,
+        actor: String,
+    ) -> Result<User, MetaError> {
+        let resolved = crate::raft::types::ResolvedRelinkUser {
+            from,
+            into,
+            actor,
+            entry_id: LedgerEntryId::new(),
+            at: time::OffsetDateTime::now_utc(),
+        };
+        match self
+            .write(MetadataCommand::RelinkUser(Box::new(resolved)))
+            .await?
+        {
+            CommandResponse::User(user) => Ok(*user),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn make_project_owner(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+    ) -> Result<ProjectMember, MetaError> {
+        let resolved = crate::raft::types::ResolvedMakeOwner {
+            project_id,
+            user_id,
+            at: time::OffsetDateTime::now_utc(),
+        };
+        match self
+            .write(MetadataCommand::MakeProjectOwner(Box::new(resolved)))
+            .await?
+        {
+            CommandResponse::Member(member) => Ok(*member),
+            _ => Err(unexpected_response()),
+        }
+    }
+
     async fn bootstrap_cluster(&self, cluster_id: ClusterId) -> Result<(), MetaError> {
         self.write(MetadataCommand::BootstrapCluster(cluster_id))
             .await?;

@@ -293,6 +293,8 @@ pub enum LedgerReason {
         /// Charged by the background task rather than by someone pressing a button.
         automatic: bool,
     },
+    /// Credit moved over when an admin re-linked a duplicate user into this one.
+    AccountMerged { from_user: UserId },
 }
 
 /// One change to a balance. Balances only ever change together with one of these.

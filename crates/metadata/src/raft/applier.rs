@@ -206,6 +206,12 @@ pub(crate) fn apply_metadata_command(
             .map(|checkout| CommandResponse::Checkout(Box::new(checkout))),
         MetadataCommand::CompleteCheckout(done) => billing_apply::complete_checkout(db, *done)
             .map(|checkout| CommandResponse::Checkout(Box::new(checkout))),
+        MetadataCommand::RelinkUser(resolved) => crate::raft::accounts::relink_user(db, *resolved)
+            .map(|u| CommandResponse::User(Box::new(u))),
+        MetadataCommand::MakeProjectOwner(resolved) => {
+            crate::raft::accounts::make_project_owner(db, *resolved)
+                .map(|m| CommandResponse::Member(Box::new(m)))
+        }
         MetadataCommand::RebuildDerivedIndexes => {
             billing_apply::rebuild_derived_indexes(db).map(|_| CommandResponse::Unit)
         }

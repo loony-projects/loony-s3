@@ -39,7 +39,8 @@ impl From<MetaError> for AdminError {
             MetaError::InvalidNodeTransition { .. }
             | MetaError::NodeRemoved(_)
             | MetaError::OwnerAlreadyInProject(_)
-            | MetaError::OwnerIsAdmin(_) => StatusCode::CONFLICT,
+            | MetaError::OwnerIsAdmin(_)
+            | MetaError::CannotRelink(_) => StatusCode::CONFLICT,
             MetaError::NoSuchGiftCode => StatusCode::NOT_FOUND,
             MetaError::InvalidContinuationToken => StatusCode::BAD_REQUEST,
             MetaError::RaftUnavailable(_) => {

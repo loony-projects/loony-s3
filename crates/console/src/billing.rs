@@ -339,6 +339,9 @@ fn describe(
             };
             (format!("{what}: {name}"), Some(*project_id))
         }
+        LedgerReason::AccountMerged { .. } => {
+            ("Credit moved when your accounts were joined".into(), None)
+        }
     }
 }
 
