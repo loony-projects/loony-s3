@@ -3,7 +3,10 @@
 # is running.
 set -euo pipefail
 
-STATE_DIR="${STATE_DIR:-/tmp/loony-cluster-run}"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+load_dotenv
+require_env CLUSTER_STATE_DIR
+STATE_DIR="$CLUSTER_STATE_DIR"
 
 shopt -s nullglob
 pid_files=("$STATE_DIR"/node*.pid)

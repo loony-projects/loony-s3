@@ -2,7 +2,13 @@
 # the credentials a script needs are actually set. Not meant to be run directly.
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOTENV_FILE="$SCRIPTS_DIR/.env"
+# Which settings file to use. Defaults to scripts/.env; point it elsewhere to run a second
+# instance side by side, e.g. LS3_ENV_FILE=scripts/.env.dev scripts/start-standalone.sh
+DOTENV_FILE="${LS3_ENV_FILE:-$SCRIPTS_DIR/.env}"
+if [[ -n "${LS3_ENV_FILE:-}" && ! -f "$DOTENV_FILE" ]]; then
+  echo "LS3_ENV_FILE points at $DOTENV_FILE, which doesn't exist" >&2
+  exit 1
+fi
 
 # Reads KEY=VALUE lines from scripts/.env into shell variables. Parsed rather than
 # sourced, so a secret containing `$`, `#` or backticks is taken literally. Variables
@@ -22,6 +28,16 @@ load_dotenv() {
     fi
     [[ -n "${!key:-}" ]] || printf -v "$key" '%s' "$value"
   done <"$DOTENV_FILE"
+}
+
+# Exports every LS3_* setting, from the settings file or the environment, so the server
+# sees all of them (sign-in, billing, the UI, the admin address...) without each script
+# having to list them.
+export_ls3_settings() {
+  local name
+  for name in $(compgen -v LS3_); do
+    [[ "$name" == LS3_ENV_FILE || -z "${!name}" ]] || export "${name?}"
+  done
 }
 
 # Exits with a pointer to the fix if any of the named variables is unset or empty.

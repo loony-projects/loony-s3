@@ -1,7 +1,8 @@
+import { ADMIN_API_URL } from '@/lib/env';
 import { ApiError, getCredentials, signedFetch } from './client';
 
 /** The admin API only listens on loopback, separately from the LS3 endpoint used to sign in. */
-export const ADMIN_ENDPOINT = (import.meta.env['VITE_ADMIN_API_URL'] as string | undefined) || 'http://127.0.0.1:7253';
+export const ADMIN_ENDPOINT = ADMIN_API_URL;
 
 async function adminRequest<T>(method: string, path: string, opts: { query?: Record<string, string>; json?: unknown } = {}): Promise<T> {
   const credentials = { ...getCredentials(), endpoint: ADMIN_ENDPOINT };

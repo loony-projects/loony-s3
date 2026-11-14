@@ -1,8 +1,7 @@
 import { isBusy } from '@/lib/activity';
+import { OIDC_CLIENT_ID as CLIENT_ID, OIDC_ISSUER as ISSUER } from '@/lib/env';
 import { useConsoleStore } from '@/store/useConsoleStore';
 
-const ISSUER = (import.meta.env['VITE_OIDC_ISSUER'] as string | undefined)?.replace(/\/$/, '');
-const CLIENT_ID = import.meta.env['VITE_OIDC_CLIENT_ID'] as string | undefined;
 const TRANSACTION_KEY = 'loony-oidc-transaction';
 const LAST_RENEWAL_KEY = 'loony-last-renewal';
 

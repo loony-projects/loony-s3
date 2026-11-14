@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Stops the standalone loony-server started by start-standalone.sh. Idempotent: safe
 # to run when nothing is running.
+#
+# Usage: scripts/stop-standalone.sh
+#        LS3_ENV_FILE=scripts/.env.dev scripts/stop-standalone.sh
 set -euo pipefail
 
-STATE_DIR="${STATE_DIR:-/tmp/loony-standalone-run}"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+load_dotenv
+require_env STATE_DIR
 PID_FILE="$STATE_DIR/loony-server.pid"
 
 if [[ ! -f "$PID_FILE" ]]; then

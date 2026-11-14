@@ -6,6 +6,9 @@ target/
 .env
 .env.local
 .env.*.local
+# Second instances' settings, such as scripts/.env.dev
+scripts/.env.*
+!scripts/.env.example
 
 # --- Rust (auto-detected) ---
 # Detected via: Cargo.toml

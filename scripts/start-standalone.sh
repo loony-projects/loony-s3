@@ -2,9 +2,10 @@
 # Starts one loony-server in standalone mode as a background process.
 #
 # Usage: scripts/start-standalone.sh
-# Config (scripts/.env or environment -- see scripts/.env.example):
-#   required: ACCESS_KEY, SECRET_KEY
-#   optional: DATA_DIR, BIND_ADDR, REGION
+#        LS3_ENV_FILE=scripts/.env.dev scripts/start-standalone.sh   (a second instance)
+# Config (scripts/.env or $LS3_ENV_FILE, or environment -- see scripts/.env.example):
+#   required: ACCESS_KEY, SECRET_KEY, DATA_DIR, BIND_ADDR, REGION, STATE_DIR
+#   optional: any LS3_* setting, such as LS3_ADMIN_ADDR, LS3_OIDC_* or LS3_BILLING_*
 #
 # State (pidfile/log/env-for-other-scripts) lives under $STATE_DIR, not the repo --
 # see stop-standalone.sh to tear this back down, and curl-demo.sh to talk to it.
@@ -12,13 +13,9 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 load_dotenv
-require_env ACCESS_KEY SECRET_KEY
+require_env ACCESS_KEY SECRET_KEY DATA_DIR BIND_ADDR REGION STATE_DIR
+export_ls3_settings
 
-DATA_DIR="${DATA_DIR:-/tmp/loony-standalone}"
-BIND_ADDR="${BIND_ADDR:-127.0.0.1:7353}"
-REGION="${REGION:-us-east-1}"
-
-STATE_DIR="${STATE_DIR:-/tmp/loony-standalone-run}"
 PID_FILE="$STATE_DIR/loony-server.pid"
 LOG_FILE="$STATE_DIR/loony-server.log"
 ENV_FILE="$STATE_DIR/env"
@@ -37,6 +34,7 @@ echo "building loony-server..."
 (cd "$REPO_ROOT" && cargo build --bin loony-server 2>&1 | tail -5)
 
 echo "starting loony-server (standalone) on http://$BIND_ADDR, data dir $DATA_DIR"
+mkdir -p "$DATA_DIR"
 LS3_MODE=standalone \
 LS3_DATA_DIR="$DATA_DIR" \
 LS3_BIND_ADDR="$BIND_ADDR" \
@@ -62,6 +60,9 @@ echo "started (pid $(cat "$PID_FILE"))"
 echo "  endpoint:    http://$BIND_ADDR"
 echo "  access key:  $ACCESS_KEY"
 echo "  log:         $LOG_FILE"
+[[ -z "${LS3_ADMIN_ADDR:-}" ]] || echo "  admin API:   http://$LS3_ADMIN_ADDR"
+[[ -z "${LS3_OIDC_ISSUER:-}" ]] || echo "  sign-in:     $LS3_OIDC_ISSUER"
+[[ -z "${LS3_BILLING_MODE:-}" ]] || echo "  billing:     $LS3_BILLING_MODE"
 echo
 echo "curl demo: source $ENV_FILE && scripts/curl-demo.sh"
 echo "rclone:    source $ENV_FILE && rclone lsd loony:"

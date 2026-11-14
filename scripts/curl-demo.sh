@@ -9,20 +9,21 @@
 #
 # Usage:
 #   scripts/start-standalone.sh
-#   source /tmp/loony-standalone-run/env   # sets ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY
+#   source "$STATE_DIR/env"   # sets ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY
 #   scripts/curl-demo.sh
 #
 # Config (scripts/.env or environment -- see scripts/.env.example):
-#   required: ACCESS_KEY, SECRET_KEY
-#   optional: ENDPOINT, REGION, BUCKET, OBJECT_KEY
+#   required: ACCESS_KEY, SECRET_KEY, REGION, and ENDPOINT or BIND_ADDR
+#   optional: BUCKET, OBJECT_KEY (the demo's own names)
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 load_dotenv
-require_env ACCESS_KEY SECRET_KEY
-
-ENDPOINT="${ENDPOINT:-http://127.0.0.1:7353}"
-REGION="${REGION:-us-east-1}"
+require_env ACCESS_KEY SECRET_KEY REGION
+if [[ -z "${ENDPOINT:-}" ]]; then
+  require_env BIND_ADDR
+  ENDPOINT="http://$BIND_ADDR"
+fi
 BUCKET="${BUCKET:-curl-demo-bucket}"
 OBJECT_KEY="${OBJECT_KEY:-hello.txt}"
 

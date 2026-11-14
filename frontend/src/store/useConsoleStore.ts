@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { API_URL, REGION } from '@/lib/env';
 
-export const API_ENDPOINT = ((import.meta.env['VITE_API_URL'] as string | undefined) || 'http://localhost:7353').replace(/\/$/, '');
-export const API_REGION = (import.meta.env['VITE_REGION'] as string | undefined) || 'us-east-1';
+export const API_ENDPOINT = API_URL;
+export const API_REGION = REGION;
 
 export interface ConsoleUser {
   id: string;

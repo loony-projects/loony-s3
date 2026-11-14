@@ -4,21 +4,19 @@
 # doesn't mean yet (no voter promotion/HA failover; a non-leader node can't take writes).
 #
 # Usage: scripts/start-cluster.sh
-# Config (scripts/.env or environment -- see scripts/.env.example):
-#   required: ACCESS_KEY, SECRET_KEY, CLUSTER_TOKEN
-#   optional: CLUSTER_SIZE (default 3), DATA_ROOT, REGION, CLUSTER_ID
+# Config (scripts/.env or $LS3_ENV_FILE, or environment -- see scripts/.env.example):
+#   required: ACCESS_KEY, SECRET_KEY, CLUSTER_TOKEN, CLUSTER_SIZE, CLUSTER_ID, REGION,
+#             DATA_ROOT, CLUSTER_STATE_DIR, CLUSTER_HOST, CLUSTER_API_PORT,
+#             CLUSTER_ADMIN_PORT, CLUSTER_RPC_PORT
+# Node n uses each port plus n-1.
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 load_dotenv
-require_env ACCESS_KEY SECRET_KEY CLUSTER_TOKEN
+require_env ACCESS_KEY SECRET_KEY CLUSTER_TOKEN CLUSTER_SIZE CLUSTER_ID REGION DATA_ROOT \
+  CLUSTER_STATE_DIR CLUSTER_HOST CLUSTER_API_PORT CLUSTER_ADMIN_PORT CLUSTER_RPC_PORT
 
-CLUSTER_SIZE="${CLUSTER_SIZE:-3}"
-DATA_ROOT="${DATA_ROOT:-/tmp/loony-cluster}"
-REGION="${REGION:-us-east-1}"
-CLUSTER_ID="${CLUSTER_ID:-devcluster}"
-
-STATE_DIR="${STATE_DIR:-/tmp/loony-cluster-run}"
+STATE_DIR="$CLUSTER_STATE_DIR"
 ENV_FILE="$STATE_DIR/env"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -62,11 +60,11 @@ declare -a BIND_ADDRS CLUSTER_ADDRS
 
 for i in $(seq 1 "$CLUSTER_SIZE"); do
   idx=$((i - 1))
-  bind_port=$((7353 + idx))
-  cluster_port=$((9100 + idx))
-  admin_addr="127.0.0.1:$((7253 + idx))"
-  bind_addr="127.0.0.1:$bind_port"
-  cluster_addr="127.0.0.1:$cluster_port"
+  bind_port=$((CLUSTER_API_PORT + idx))
+  cluster_port=$((CLUSTER_RPC_PORT + idx))
+  admin_addr="$CLUSTER_HOST:$((CLUSTER_ADMIN_PORT + idx))"
+  bind_addr="$CLUSTER_HOST:$bind_port"
+  cluster_addr="$CLUSTER_HOST:$cluster_port"
   BIND_ADDRS[$i]="$bind_addr"
   CLUSTER_ADDRS[$i]="$cluster_addr"
   data_dir="$DATA_ROOT/node$i"
@@ -84,7 +82,7 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
       nohup "$BIN" --mode cluster --bootstrap >"$log_file" 2>&1 &
     echo $! >"$pid_file"
 
-    if ! wait_for_port 127.0.0.1 "$cluster_port"; then
+    if ! wait_for_port "$CLUSTER_HOST" "$cluster_port"; then
       echo "node 1 never came up -- see $log_file" >&2
       exit 1
     fi
@@ -97,7 +95,7 @@ for i in $(seq 1 "$CLUSTER_SIZE"); do
       nohup "$BIN" --mode cluster --join "$seed" >"$log_file" 2>&1 &
     echo $! >"$pid_file"
 
-    if ! wait_for_port 127.0.0.1 "$cluster_port"; then
+    if ! wait_for_port "$CLUSTER_HOST" "$cluster_port"; then
       echo "node $i never came up -- see $log_file" >&2
       exit 1
     fi

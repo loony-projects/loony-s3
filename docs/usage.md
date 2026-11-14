@@ -64,15 +64,26 @@ The scripts read their credentials from `scripts/.env` (gitignored) and refuse t
 if one is missing; variables already set in your shell take precedence over the file.
 
 ```bash
-cp scripts/.env.example scripts/.env      # then fill in ACCESS_KEY, SECRET_KEY, CLUSTER_TOKEN
-scripts/start-standalone.sh               # builds + starts one node on 127.0.0.1:7353
-source /tmp/loony-standalone-run/env      # ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY + rclone remote
+cp scripts/.env.example scripts/.env      # then fill in every value
+scripts/start-standalone.sh               # builds + starts one node on BIND_ADDR
+source "$STATE_DIR/env"                   # ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY + rclone remote
 scripts/curl-demo.sh                      # create bucket -> put -> head -> get -> list -> delete
 scripts/stop-standalone.sh
 ```
 
 `scripts/start-cluster.sh`/`stop-cluster.sh` do the same for a local multi-node cluster
 (see [cluster.md](cluster.md)).
+
+The scripts have no built-in defaults: every port, folder and setting comes from the
+settings file, and any `LS3_*` line in it is passed to the server as is. To run a second
+instance beside the first, such as a dev copy next to a live server, put its settings in
+another file with different ports and folders, and name it with `LS3_ENV_FILE`:
+
+```bash
+cp scripts/.env.example scripts/.env.dev  # different BIND_ADDR, DATA_DIR, STATE_DIR, LS3_ADMIN_ADDR
+LS3_ENV_FILE=scripts/.env.dev scripts/start-standalone.sh
+LS3_ENV_FILE=scripts/.env.dev scripts/stop-standalone.sh
+```
 
 `curl-demo.sh` signs every request itself (pure bash + `openssl`, no SDK), so it doubles
 as a readable reference for the exact signing steps this server verifies — copy its
@@ -84,7 +95,7 @@ The env file written by the start scripts also defines an rclone remote named `l
 purely through `RCLONE_CONFIG_LOONY_*` variables, so no `rclone.conf` is needed:
 
 ```bash
-source /tmp/loony-standalone-run/env
+source "$STATE_DIR/env"
 
 rclone mkdir     loony:my-bucket
 rclone copy      ./photo.jpg loony:my-bucket/
@@ -161,10 +172,11 @@ the LS3 API.
 cd frontend
 npm install
 cp .env.example .env.local
-# edit .env.local: VITE_API_URL must point at the running server's LS3 API
-#   (e.g. http://127.0.0.1:7353), VITE_REGION must match LS3_REGION
+# edit .env.local: DEV_HOST and DEV_PORT are where the dev server listens,
+#   VITE_API_URL must point at the running server's LS3 API, VITE_REGION must match
+#   LS3_REGION, and VITE_ADMIN_API_URL must match LS3_ADMIN_ADDR
 npm run dev
-# open http://localhost:5173
+# open http://DEV_HOST:DEV_PORT
 ```
 
 Sign in with the same access key / secret key pair the server printed at startup, the
