@@ -93,6 +93,17 @@ headers on GET/HEAD (user metadata is stored and preserved correctly through PUT
 multipart, just never echoed back yet — a pre-existing gap, not new to Phase 10) all
 remain unimplemented.
 
+**Web console, projects and paid plans.** People sign in with their Loony account
+(loony-auth only handles sign-in), create projects, and invite others. A project owns its
+buckets and access keys. Anyone can create up to 10 projects, but a project only stores
+data once an Owner subscribes to a plan: by default ₹1,000 a month, including GST, for
+15 GiB. Subscriptions are paid from prepaid credit, which comes from gift codes that admins
+create, or from a simulated checkout when `LS3_BILLING_MODE=test`. **Real payments aren't
+built yet.** Storage limits are enforced on every upload, including multipart and
+concurrent uploads. A project whose renewal fails gets 7 days' grace, then becomes
+read-only, then is suspended 30 days later. See
+[`docs/usage.md`](docs/usage.md#plans-and-billing).
+
 **Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (the bundled
 scripts, rclone, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env
 var/flag; [`docs/api-reference.md`](docs/api-reference.md) for the exact LS3 API surface;
@@ -137,6 +148,7 @@ See `docs/architecture.md` §3 for the full crate-dependency diagram. Short vers
 - `auth` — SigV4 + presigned URLs
 - `api` — thin Axum HTTP layer
 - `healing` — scrubbing, healing, GC, rebalancing
+- `console` — API behind the web console: sign-in, projects and billing
 - `admin` / `admin-cli` — admin API (see [docs/admin.md](docs/admin.md)) + CLI (not implemented yet)
 - `observability` — tracing/metrics
 - `server` — the `server` binary, wires everything together

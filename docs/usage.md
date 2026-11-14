@@ -179,6 +179,9 @@ root key and the admin panel. Someone signed in with their account sees their pr
 each project's buckets, access keys, members and settings. Their keys are kept for that
 browser tab only.
 
+Creating a project is open to everyone signed in, up to 10 each, but a new project can't
+hold anything until it's paid for: see [Plans and billing](#plans-and-billing).
+
 From there: create a bucket, drag-and-drop files to upload, list/download/delete
 objects, copy a presigned link for a file. The web UI's own uploader always sends a
 single `PUT` regardless of size (no chunking) — the server itself does support
@@ -195,6 +198,55 @@ from any static host, pointed at a real `VITE_API_URL`).
 frontend works out of the box even though it's served from a different origin/port than
 the API. See `crates/api/src/lib.rs`'s `CorsLayer` if you need to lock this down for a
 real deployment.
+
+## Plans and billing
+
+Only applies to projects, when [sign-in is configured](configuration.md#sign-in-with-loony).
+Buckets owned by access keys from before projects existed, and the root key, have no
+limits.
+
+**Plans.** By default there's one: Standard, 15 GiB for ₹1,000 a month including GST.
+Admins can set others with `LS3_BILLING_PLANS` ([configuration](configuration.md#billing)).
+A plan's limit covers everything the project stores, across all its buckets, counted as
+the files' own sizes.
+
+**Credit.** Each person has a credit balance, in rupees, shown on the **Billing** page with
+its history. Credit comes from:
+
+- **Gift codes**, which admins create. Type one into **Redeem a gift code**. Each person can
+  use a code once.
+- **Add credit**, only on test servers (`LS3_BILLING_MODE=test`). It opens a page clearly
+  labelled "Test payment — no money is charged", which can succeed or fail. Real payments
+  aren't built yet.
+
+**Subscribing.** A project Owner opens the project's **Plan** tab and subscribes. The first
+month is paid from their credit straight away, and they become the payer. Each later month
+is paid from the payer's credit automatically, on the same day of the month (or the
+month's last day, if it's shorter). Members can see the plan and usage but can't pay or
+cancel. If someone else pays to renew, they become the payer.
+
+**What happens when a renewal can't be paid:**
+
+| State | What works | How long |
+| --- | --- | --- |
+| Unpaid | Nothing can be stored. A new project starts here. | Until someone subscribes |
+| Active | Everything, up to the plan's storage. | While renewals are paid |
+| Grace | Everything still works, with a warning. | 7 days |
+| Read-only | Downloading and listing. Nothing can be uploaded, changed or deleted, and new access keys can't be created. | 30 days |
+| Suspended | Nothing. Its access keys stop working and it can't be opened, but nothing is deleted. | Until renewed |
+
+**Renew now** on the Plan tab pays at once and makes the project active again. Paying
+during grace continues the old period, so no time is lost or gained; paying later starts a
+new month from that day. Add credit before renewing.
+
+**Cancelling** keeps the project working until the end of the paid month, then it becomes
+read-only, and later suspended, as above. You can undo a cancel before the month ends.
+There are no refunds.
+
+**Storage limits.** Uploads that would go over the plan's storage fail with
+`QuotaExceeded`, both from SDKs and in the web UI. Multipart uploads count their parts as
+they arrive, and parallel uploads can't together overshoot the limit. Deleting files frees
+space at once. The project header shows usage such as "4.2 GB of 15 GB".
 
 ## Multiple local volumes
 

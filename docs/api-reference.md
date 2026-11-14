@@ -111,7 +111,7 @@ URIs can call it from a browser.
 | Who am I | `GET /_console/v1/me` | |
 | Sign out | `DELETE /_console/v1/session` | The key stops working at once, along with the project keys opened from it. |
 | List projects | `GET /_console/v1/projects` | Returns `created`, `joined` and `invites`. |
-| Create a project | `POST /_console/v1/projects` | `{"name"}`. Needs an admin's approval, and one person can create 10. |
+| Create a project | `POST /_console/v1/projects` | `{"name"}`. Anyone signed in can, up to 10 each. It starts unpaid and can't store anything until it's subscribed. |
 | View a project | `GET /_console/v1/projects/{id}` | |
 | Rename a project | `PATCH /_console/v1/projects/{id}` | `{"name"}`. Owner only. |
 | Delete a project | `DELETE /_console/v1/projects/{id}` | Owner only. Refused while it has buckets. Removes its keys, members and invites. |
@@ -129,6 +129,18 @@ URIs can call it from a browser.
 | Cancel an invite | `DELETE /_console/v1/projects/{id}/invites/{invite}` | Owner only. |
 | Accept an invite | `POST /_console/v1/invites/{invite}/accept` | Only for the verified email it was sent to. |
 | Decline an invite | `POST /_console/v1/invites/{invite}/decline` | Only for the verified email it was sent to. |
+| Billing overview | `GET /_console/v1/billing` | Returns `balance_paise`, the `plans`, and `checkout`: the payment provider's name, or `null` when paying isn't available. |
+| Credit history | `GET /_console/v1/billing/ledger` | Newest first. Each entry has the change, the balance after it, and what it was for. |
+| Redeem a gift code | `POST /_console/v1/billing/gift-codes/redeem` | `{"code"}`. Case, spaces and dashes are ignored. Each person can redeem a code once. Limited to 10 attempts a minute per person and per client address. |
+| Start a checkout | `POST /_console/v1/billing/checkouts` | `{"amount_paise", "project_id"?, "plan_id"?}`, from ₹1 to ₹1,00,000. With a project, a successful payment also subscribes it. Only when `LS3_BILLING_MODE=test`; otherwise `checkout_unavailable`. |
+| View a checkout | `GET /_console/v1/billing/checkouts/{id}` | Only your own. |
+| Finish a test checkout | `POST /_console/v1/billing/checkouts/{id}/confirm` | `{"outcome": "succeed" or "fail"}`. Completing a checkout twice doesn't add credit twice. |
+| Payment webhook | `POST /_console/v1/billing/webhooks/{provider}` | Unsigned: the provider verifies it. Nothing real uses it yet. |
+| View a subscription | `GET /_console/v1/projects/{id}/subscription` | Any member. Returns its `state` (`unpaid`, `active`, `grace`, `read_only` or `suspended`), plan, period, payer, and `usage` with `bytes`, `objects`, `pending_bytes` and `limit_bytes`. |
+| Subscribe | `POST /_console/v1/projects/{id}/subscription` | `{"plan_id"?}`. Owner only. Pays the first period from your credit. |
+| Renew now | `POST /_console/v1/projects/{id}/subscription/renew` | Owner only. For a lapsed project: pays from your credit and makes it active again. A project in grace continues from its old period end. |
+| Cancel | `POST /_console/v1/projects/{id}/subscription/cancel` | Owner only. It keeps working until the period ends, then becomes read-only. Cancelling during grace makes it read-only at once. |
+| Undo a cancel | `POST /_console/v1/projects/{id}/subscription/resume` | Owner only, before the period ends. |
 
 Everything except signing in is signed with the session key.
 
@@ -154,14 +166,23 @@ Other keys are refused here with `wrong_key`.
 | `wrong_key` | 403 | This key isn't a session key |
 | `not_found` | 404 | It doesn't exist, or you can't see it. These look identical on purpose |
 | `owner_only` | 403 | Only a project Owner can do this |
-| `not_approved` | 403 | An admin hasn't approved this user to create projects |
+| `subscription_required` | 403 | The project isn't paid for yet |
+| `project_read_only` | 403 | The subscription lapsed or was cancelled, so nothing can be added, changed or deleted |
+| `project_suspended` | 403 | Read-only for 30 days and still unpaid, so its keys stop working |
+| `quota_exceeded` | 403 | The project has used all the storage its plan allows |
+| `insufficient_credit` | 402 | Not enough credit to pay for this |
+| `checkout_unavailable` | 404 | Paying isn't turned on for this server |
+| `gift_code_invalid` | 404 | No such gift code, or it's disabled |
+| `gift_code_expired` | 410 | |
+| `already_paid`, `no_subscription` | 409 | |
+| `gift_code_used_up`, `gift_code_already_redeemed` | 409 | |
 | `project_disabled` | 403 | An admin has disabled this project |
 | `email_not_verified` | 403 | Accepting an invite needs a verified email address |
 | `project_not_empty` | 409 | Delete the project's buckets first |
 | `last_owner` | 409 | A project must keep at least one Owner |
 | `project_limit_reached`, `key_limit_reached` | 409 | Over the limit |
 | `invite_exists`, `already_member`, `invite_expired` | 409 | |
-| `too_many_requests` | 429 | Too many sign-in attempts |
+| `too_many_requests` | 429 | Too many sign-in or gift code attempts |
 | `identity_provider_unavailable` | 502 | The identity provider can't be reached |
 | `unavailable` | 503 | This node can't reach the metadata leader |
 
@@ -242,6 +263,8 @@ Errors are XML `<Error>` bodies matching the upstream protocol's shape and vocab
 | `SignatureDoesNotMatch` | 403 | Signature verification failed |
 | `InvalidAccessKeyId` | 403 | Access key doesn't correspond to a known credential |
 | `RequestTimeTooSkewed` | 403 | Request timestamp too far from server time |
+| `QuotaExceeded` | 403 | The upload would take the project over its plan's storage. Checked when an upload starts if its size is declared, and again when it's stored, counting uploads still in progress |
+| `ProjectReadOnly` | 403 | The project isn't paid for, or its subscription lapsed or was cancelled. Reads still work until it's suspended |
 | `InternalError` | 500 | Anything internal (storage/metadata failure) — details go to the server's log, never the response body |
 
 ## Response headers

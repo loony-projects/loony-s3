@@ -1,6 +1,7 @@
 # Todo: Sign in with Loony and projects
 
-Nothing here is built yet. The sign-in design and its reasoning are in
+Phases 0 to 4 and 6 are built; what's left is mostly going live (phase 5) and real
+payments. The sign-in design and its reasoning are in
 [loony-auth-signin.md](loony-auth-signin.md).
 
 ## The result
@@ -19,7 +20,15 @@ Nothing here is built yet. The sign-in design and its reasoning are in
   projects apart.
 - **Roles:** Owner can do everything. Member can manage buckets and access keys, and see
   who's in the project. A read-only role comes later.
-- **Creating projects:** only people an admin approves, until storage limits are enforced.
+- **Creating projects:** anyone signed in, up to 10 each. A project stores nothing until an
+  Owner pays for it, which is what keeps strangers from filling the disk.
+- **Plans:** plans are settings, not code. One plan to start: ₹1,000 a month including GST,
+  for 15 GiB (GiB, not GB). Periods are calendar months.
+- **Paying:** subscriptions are paid from prepaid credit, held in integer paise with a
+  ledger. The Owner who last paid is charged for renewals. Paying during grace continues
+  the old period.
+- **Lapsing:** unpaid → active → grace (7 days) → read-only (strict: no deletes either) →
+  suspended 30 days later. Cancelling takes effect when the paid period ends.
 - **Invites:** per project, by email, and shown inside the UI. LS3 won't send email in the
   first version.
 - **Temporary keys:** the browser gets short-lived keys lasting about 8 hours, with no
@@ -232,14 +241,48 @@ These steps change live services, so confirm each one first.
 - [ ] Confirm one project's key can't reach another project's buckets.
 - [ ] Update `README.md`, `docs/usage.md` and `docs/configuration.md`.
 
-## Phase 6: Storage limits, then open project creation
+## Phase 6: Paid projects and storage limits
 
-- [ ] Track each project's stored bytes and object count.
-- [ ] Add a default project limit, with per-project overrides in the admin panel.
-- [ ] Enforce the limit on `PutObject`, `UploadPart` and `CompleteMultipartUpload`.
-- [ ] Show usage in the UI and the admin panel.
-- [ ] Test the limit under concurrent uploads.
-- [ ] Add a setting that lets every verified user create projects, then turn it on.
+Done. Limits come from the project's plan, so there's no separate default limit or
+per-project override.
+
+- [x] Track each project's stored bytes, object count and in-progress multipart bytes,
+      updated in the same Raft command as the change, and count existing data once on
+      upgrade.
+- [x] Plans as settings (`LS3_BILLING_PLANS`), with one default plan.
+- [x] Subscriptions with the states unpaid, active, grace, read-only and suspended, and
+      cancelling at the end of the period.
+- [x] A background task on every node that renews and lapses subscriptions. Each step is
+      a compare-and-set, so running it twice or on two nodes can't charge twice.
+- [x] Enforce limits and read-only on every write: `CreateBucket`, `DeleteBucket`,
+      `PutObject`, `DeleteObject`, `CreateMultipartUpload`, `UploadPart`,
+      `CompleteMultipartUpload` and `AbortMultipartUpload`. Checked inside Raft's apply, so
+      parallel uploads can't overshoot, plus an early check of the declared size.
+- [x] Suspended projects' keys stop working and the project can't be opened.
+- [x] Credit in integer paise, with a ledger of every change.
+- [x] Gift codes: 17 letters and digits, stored hashed, with an amount, optional expiry and
+      use limit, once per person, rate-limited and audited. Admins create, list and disable
+      them.
+- [x] A `PaymentProvider` trait, with a simulated checkout only when
+      `LS3_BILLING_MODE=test`, labelled "Test payment — no money is charged".
+- [x] Web UI: a Billing page (credit, gift codes, history, projects), a project Plan tab,
+      usage in the project header, and banners for unpaid, grace, read-only and suspended.
+- [x] Admin panel: subscription and storage columns for projects, a Gift codes section, and
+      a warning when moving an account in that it starts unpaid.
+- [x] Remove the approval gate, so anyone can create projects, still up to 10.
+- [x] Tests: the state machine, snapshots and index rebuilds, permissions on every billing
+      route, 25 concurrent uploads against a 10-file limit (exactly 10 succeed), and a
+      browser run of the whole flow.
+
+Still to do:
+
+- [ ] Real payments: pick a provider (Razorpay or similar), implement `PaymentProvider` for
+      it, verify its webhook signature, and handle refunds and disputes.
+- [ ] GST invoices, with a GSTIN and invoice numbering, once real money is taken.
+- [ ] Emails before a renewal, and when a project goes into grace or read-only.
+- [ ] Decide what happens to suspended projects' data in the long run. Today it's kept
+      forever.
+- [ ] An admin action to give a project a different plan or a free period, if needed.
 
 ## Related work
 

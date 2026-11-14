@@ -45,6 +45,23 @@ and `<its address>/callback` in `LS3_OIDC_REDIRECT_URIS`.
 In a cluster, upgrade every node before turning this on: a node running an older version
 can't apply the new user records.
 
+## Billing
+
+Projects need a paid subscription before they can store anything. See
+[usage.md](usage.md#plans-and-billing) for how it looks to people.
+
+| Env var | CLI flag | Default | Required | Notes |
+|---|---|---|---|---|
+| `LS3_BILLING_MODE` | — | `off` | no | `off`: credit comes only from gift codes. `test`: also offers a simulated checkout labelled "Test payment — no money is charged", which adds credit without charging anything. Never use `test` where real people can sign in. Real payments aren't supported yet, so any other value is refused. |
+| `LS3_BILLING_PLANS` | — | one plan, `standard` | no | A JSON list of plans. The default is `[{"id":"standard","name":"Standard","price_paise":100000,"storage_bytes":16106127360,"period":{"months":1}}]`: ₹1,000 a month including GST, for 15 GiB. `period` is `{"months":n}` (calendar months) or `{"seconds":n}` (for tests). Each plan needs a unique `id` and a price, storage and period above zero. Changing a plan's price or storage affects existing subscriptions at their next renewal; removing a plan doesn't remove subscriptions to it. |
+| `LS3_BILLING_GRACE_SECS` | — | `604800` (7 days) | no | How long a project keeps working after a renewal fails, before it becomes read-only. |
+| `LS3_BILLING_SUSPEND_AFTER_SECS` | — | `2592000` (30 days) | no | How long a project stays read-only before it's suspended. |
+| `LS3_BILLING_TICK_SECS` | — | `60` | no | How often each node checks for subscriptions to renew or lapse. Every node runs the check; a step is only applied once, so running it on several nodes is safe. |
+
+In a cluster, upgrade every node before using billing: an older node can't apply the new
+records. On the first start after upgrading, the server counts every project's existing
+usage once.
+
 ## Cluster mode only
 
 These apply only when `LS3_MODE=cluster`. Standalone mode ignores all of them.

@@ -114,9 +114,9 @@ Use loony-auth's existing `loony` organization, with invites handled per project
 LS3. Anyone can have a Loony account, but they only see projects they created or were
 invited to.
 
-LS3 stores `quota_bytes` on each bucket but never enforces it, so open project creation
-would let a stranger fill the disk. Only people an admin approves can create projects
-until storage limits are enforced.
+Anyone can create projects, up to 10 each, but a project stores nothing until an Owner
+pays for it, and then only up to its plan's storage. That's what keeps a stranger from
+filling the disk. See [usage.md](usage.md#plans-and-billing).
 
 ## Alternatives considered
 

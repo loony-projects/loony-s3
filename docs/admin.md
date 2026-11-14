@@ -49,14 +49,16 @@ refresh them.
 
 | Action | Effect |
 | --- | --- |
-| Approve | Lets them create projects, up to 10. Nobody can until an admin approves them. |
-| Remove approval | Stops them creating more. Projects they already have aren't affected. |
 | Disable | Signs them out at once and stops them signing back in. Their projects keep running, and access keys in those projects keep working, because keys belong to the project. |
 
 Their passwords and account security are managed in loony-auth. Disabling someone there
 doesn't by itself lock them out of LS3, so do it here too.
 
-**Projects**: every project, with its members, access key count and usage. Disabling one stops
+Anyone who signs in can create up to 10 projects without approval. A project can't store
+anything until an Owner pays for it.
+
+**Projects**: every project, with its subscription, members, access key count, and storage
+used out of its plan's limit. Disabling one stops
 all its access keys at once and ends its members' sessions in it, without deleting anything.
 Members can still see the project but can't change it. Enabling it brings back its access
 keys as they were, and members open it again as normal.
@@ -64,7 +66,17 @@ keys as they were, and members open it again as normal.
 **Move an account into a project** appears here when there are owners from before projects
 existed. Their buckets and keys become the project's, the person you choose becomes its
 Owner, and apps using those keys keep working. That person must have signed in at least once.
-The root key's owner can't be moved, and this can't be undone from the panel.
+The root key's owner can't be moved, and this can't be undone from the panel. A moved
+account starts unpaid, like any new project: its data stays readable, but nothing can be
+added, changed or deleted until its Owner subscribes. Give them a gift code first if the
+move shouldn't interrupt their apps.
+
+**Gift codes**: codes that add credit to the account that redeems them. Set an amount, how
+many people can use it (1 by default), an optional expiry and a note for yourself. The code
+is 17 letters and digits, shown once when it's made; after that only its last 4 characters
+are shown, because only a hash is stored. Each person can redeem a code once. Disabling a
+code stops further redemptions; credit already given stays. Expand a code to see who
+redeemed it and when. Creating, disabling and redeeming are all audited, without the code.
 
 **All buckets**: every bucket with its owner and usage. Browsing a bucket shows names and
 sizes only: it can't download, change or delete anything, and each look is audited.
@@ -98,8 +110,9 @@ Changes must go through the metadata leader's admin API, which is node 1's in a 
 started by `scripts/start-cluster.sh` (ports go up from 7253, one per node). Other nodes
 answer read requests but refuse changes.
 
-**Audit log**: admin changes, project changes made by signed-in users, bucket browsing and
-rejected requests, with who, what and the outcome. Written to `$LS3_DATA_DIR/audit.jsonl`, one JSON object per line, readable
+**Audit log**: admin changes, project changes made by signed-in users, billing (gift codes,
+payments, subscribing, cancelling, and the automatic renewals and lapses, recorded as
+`system`), bucket browsing and rejected requests, with who, what and the outcome. Written to `$LS3_DATA_DIR/audit.jsonl`, one JSON object per line, readable
 only by the server's user. It's per node, not replicated, and not rotated. It doesn't cover
 uploads and downloads through the LS3 API, and it records the claimed key on a rejected
 request, which isn't proof of who sent it.
@@ -123,6 +136,9 @@ All routes are under `/admin/v1`. Errors are `{"message": "..."}`.
 | `PATCH /projects/{id}` | `{"enabled": bool}`. Disabling stops all the project's keys at once and ends its members' sessions in it |
 | `GET /projects/adoptable-owners` | Owners from before projects existed |
 | `GET /users` | Everyone who has signed in |
-| `PATCH /users/{id}` | `{"enabled": bool, "can_create_projects": bool}`, either or both. Disabling someone ends their browser sessions at once. Their projects' access keys keep working |
+| `PATCH /users/{id}` | `{"enabled": bool}`. Disabling someone ends their browser sessions at once. Their projects' access keys keep working |
+| `GET /gift-codes` | Every gift code, newest first, with who redeemed it. Never the code itself |
+| `POST /gift-codes` | `{"amount_paise", "max_uses"?, "expires_at"?, "note"?}`. Up to ₹10,00,000 and 1,00,000 uses. The response's `code` is the only time it's shown |
+| `PATCH /gift-codes/{id}` | `{"disabled": bool}` |
 | `POST /projects/adopt-owner` | Turn an owner from before projects existed into a project, with its buckets and keys: `{"owner_id", "name", "user_id"}`. `user_id` becomes its Owner. The root key's owner is refused |
 | `GET /audit?limit=` | Newest entries first, up to 1000 |
