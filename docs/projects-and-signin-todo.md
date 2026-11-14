@@ -227,10 +227,31 @@ Do this first, because every project's apps depend on it.
 
 These steps change live services, so confirm each one first.
 
+**Ready for the real loony-auth** (done locally, nothing live changed):
+
+- [x] Check the sign-in code against loony-auth's real behaviour: issuer, endpoints, PKCE
+      S256, EdDSA, claims, codes that work once, and logout's redirect rule.
+- [x] Revoke any refresh token straight after the code exchange, and never store it.
+- [x] Cancel on the consent screen returns to the sign-in page with a note; a `state` that
+      isn't ours is refused.
+- [x] The UI reads its settings from `/config.json`, so every setting comes from
+      `scripts/.env` (`LS3_PUBLIC_API_URL` is new). A dev copy's settings file takes only the
+      `LS3_OIDC_*` lines from `scripts/.env`.
+- [x] An admin-only **Re-link** for users split by a loony-auth reset, by verified email,
+      never automatic.
+- [x] An admin **Add Owner** action, and a documented answer for projects whose only Owner
+      deleted their Loony account.
+- [ ] Register LS3 in loony-auth: see
+      [loony-auth-signin.md](loony-auth-signin.md#registering-ls3-in-loony-auth).
+- [ ] Add the client ID and secret to `scripts/.env`.
+- [ ] Test against the real loony-auth on this machine: sign in, first sign-in creates the
+      user, a second sign-in is silent, Cancel on consent, an expired or reused code, a
+      wrong `state`, sign-out ends both sessions, a disabled LS3 user is refused, and
+      **Create account** opens sign-up.
+
+**Live steps:**
+
 - [ ] Back up the live data directory.
-- [ ] Register LS3 as a confidential client in loony-auth's `loony` organization, with
-      `openid`, `profile` and `email` scopes and exact redirect URIs.
-- [ ] Add the client secret to `scripts/.env`.
 - [x] Let `loony-server` serve the built UI on its own address, as this machine has no other
       web server, and test the production build in a browser.
 - [ ] Host the UI at `s3-console.lovegood.in`, and add the tunnel route and DNS record.
@@ -285,11 +306,6 @@ Still to do:
 - [ ] An admin action to give a project a different plan or a free period, if needed.
 
 ## Related work
-
-**loony-auth**
-
-- [ ] Test whether a disabled user can still use their refresh tokens and sessions. If so,
-      fix it in loony-auth, because it also affects loony-library.
 
 **Later, not needed for this work**
 

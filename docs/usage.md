@@ -168,25 +168,27 @@ The frontend (`frontend/`) is a Vite/React app that signs every request with Sig
 itself, directly from the browser — there's no backend-for-frontend or proxy in front of
 the LS3 API.
 
+The UI has no settings of its own. It reads them from `/config.json` when it starts, and
+`npm run dev` serves that from the same settings file as the scripts: `scripts/.env`, or
+the one named by `LS3_ENV_FILE`. It needs `REGION`, `LS3_UI_ADDR` (where the dev server
+listens), `LS3_PUBLIC_API_URL` (the LS3 API, as the browser reaches it) and
+`LS3_ADMIN_ADDR`, plus the `LS3_OIDC_*` settings for signing in with Loony.
+
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local
-# edit .env.local: DEV_HOST and DEV_PORT are where the dev server listens,
-#   VITE_API_URL must point at the running server's LS3 API, VITE_REGION must match
-#   LS3_REGION, and VITE_ADMIN_API_URL must match LS3_ADMIN_ADDR
-npm run dev
-# open http://DEV_HOST:DEV_PORT
+LS3_ENV_FILE=scripts/.env.dev npm run dev   # or plain `npm run dev` for scripts/.env
+# open http://localhost:<port in LS3_UI_ADDR>
 ```
 
 Sign in with the same access key / secret key pair the server printed at startup, the
 server's URL, and its region. The credentials are kept client-side (in the browser) and
 used to sign every request — nothing is sent to any third party.
 
-To offer **Sign in with Loony** and projects instead, set `VITE_OIDC_ISSUER` and
-`VITE_OIDC_CLIENT_ID` in `.env.local`, and give the server the matching settings: see
+To offer **Sign in with Loony** and projects instead, set the `LS3_OIDC_*` settings: see
 [configuration.md](configuration.md#sign-in-with-loony). `<this site>/callback` must be one
-of its redirect URIs. Signing in with an access key stays available behind a link, for the
+of its redirect URIs, and registered in loony-auth. Open the site at exactly that address:
+`http://localhost:5180` and `http://127.0.0.1:5180` are different sites to loony-auth. Signing in with an access key stays available behind a link, for the
 root key and the admin panel. Someone signed in with their account sees their projects, and
 each project's buckets, access keys, members and settings. Their keys are kept for that
 browser tab only.
@@ -203,8 +205,10 @@ multipart upload (e.g. `rclone copy` of a large file uses it automatically), see
 Signed in with the root key on the same machine as the server, the **Admin** link opens
 the admin panel: see [admin.md](admin.md).
 
-Production build: `npm run build` (output in `frontend/dist/`, a static site — serve it
-from any static host, pointed at a real `VITE_API_URL`).
+Production build: `npm run build` (output in `frontend/dist/`, a static site that works
+anywhere). The simplest way to serve it is loony-server itself, with `LS3_UI_DIR` and
+`LS3_PUBLIC_API_URL`, which also serves its `/config.json`. Any other web server must serve
+that file too.
 
 **CORS**: the server sends permissive CORS headers (any origin) by default, so the
 frontend works out of the box even though it's served from a different origin/port than

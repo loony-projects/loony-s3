@@ -57,11 +57,26 @@ doesn't by itself lock them out of LS3, so do it here too.
 Anyone who signs in can create up to 10 projects without approval. A project can't store
 anything until an Owner pays for it.
 
+**Accounts to re-link** appears above the list only after loony-auth's database was reset
+and someone has signed in since, which gives them a second, empty user. It lists each
+person whose two users share a **verified** email address, where the newer one appeared
+after the older one last signed in. **Re-link** gives the old user the new sign-in, with
+everything the new one did meanwhile (projects, memberships, keys, credit), deletes the
+duplicate, and signs them out once. Nothing is re-linked unless you press the button, and
+each one is audited. See
+[loony-auth-signin.md](loony-auth-signin.md#re-linking-users-after-a-loony-auth-reset).
+
 **Projects**: every project, with its subscription, members, access key count, and storage
 used out of its plan's limit. Disabling one stops
 all its access keys at once and ends its members' sessions in it, without deleting anything.
 Members can still see the project but can't change it. Enabling it brings back its access
 keys as they were, and members open it again as normal.
+
+**Add Owner** makes anyone who has signed in an Owner of the project, adding them if they
+aren't a member. It's for a project whose Owners can't look after it any more, for example
+after deleting their Loony account: LS3 isn't told about that, so their projects keep
+running until the subscription lapses, and nothing is deleted. Nobody is removed, and it's
+audited.
 
 **Move an account into a project** appears here when there are owners from before projects
 existed. Their buckets and keys become the project's, the person you choose becomes its
@@ -137,6 +152,9 @@ All routes are under `/admin/v1`. Errors are `{"message": "..."}`.
 | `GET /projects/adoptable-owners` | Owners from before projects existed |
 | `GET /users` | Everyone who has signed in |
 | `PATCH /users/{id}` | `{"enabled": bool}`. Disabling someone ends their browser sessions at once. Their projects' access keys keep working |
+| `GET /users/relink-candidates` | Pairs of users split by a loony-auth reset: `[{"from": user, "into": user}]`. Changes nothing |
+| `POST /users/relink` | `{"from_user_id", "into_user_id"}`. Merges `from` (the newer) into `into` (the older), which takes its sign-in. Refused with 409 unless they share a verified email and `from` appeared after `into` last signed in |
+| `POST /projects/{id}/owners` | `{"user_id"}`. Makes them an Owner, adding them if needed |
 | `GET /gift-codes` | Every gift code, newest first, with who redeemed it. Never the code itself |
 | `POST /gift-codes` | `{"amount_paise", "max_uses"?, "expires_at"?, "note"?}`. Up to ₹10,00,000 and 1,00,000 uses. The response's `code` is the only time it's shown |
 | `PATCH /gift-codes/{id}` | `{"disabled": bool}` |
