@@ -11,20 +11,21 @@
 //! entirely — architecture.md §5's control-plane-vs-data-plane split doesn't apply to
 //! reads of already-committed state) can call the exact same code.
 
-use md5::{Digest as _, Md5};
-use redb::{Database, ReadableTable, TableDefinition};
 use loony_core::{
     Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectKey,
     ObjectManifest, OwnerId, UploadId, VersioningState,
 };
+use md5::{Digest as _, Md5};
+use redb::{Database, ReadableTable, TableDefinition};
 use sha2::Sha256;
 use time::OffsetDateTime;
 
 use crate::commands::{
-    Credential, CredentialKind, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary, PartSummary,
-    RegisterNode, StorageStats, User, UserAccess,
+    Credential, CredentialKind, ListObjectsPage, ListObjectsQuery, MultipartUploadState,
+    ObjectSummary, PartSummary, RegisterNode, StorageStats, User, UserAccess,
 };
 use crate::error::MetaError;
+use crate::raft::billing_apply;
 use crate::raft::projects;
 use crate::raft::types::{
     CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
@@ -34,7 +35,8 @@ use loony_core::{PartManifest, UserId};
 
 pub(crate) const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
 pub(crate) const OBJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("objects");
-pub(crate) const MULTIPART: TableDefinition<&str, &[u8]> = TableDefinition::new("multipart_uploads");
+pub(crate) const MULTIPART: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("multipart_uploads");
 pub(crate) const CREDENTIALS: TableDefinition<&str, &[u8]> = TableDefinition::new("credentials");
 pub(crate) const USERS: TableDefinition<&str, &[u8]> = TableDefinition::new("users");
 /// `issuer\0subject` to the user's id, so a sign-in can find the user it belongs to.
@@ -52,8 +54,7 @@ pub(crate) const CLUSTER_ID_KEY: &str = "cluster_id";
 
 /// Every business-data table the state machine owns — used to open/create them upfront
 /// and to enumerate them wholesale for snapshotting (`snapshot.rs`).
-pub(crate) const ALL_TABLES: &[TableDefinition<'static, &'static str, &'static [u8]>] =
-    &[
+pub(crate) const ALL_TABLES: &[TableDefinition<'static, &'static str, &'static [u8]>] = &[
     BUCKETS,
     OBJECTS,
     MULTIPART,
@@ -63,6 +64,16 @@ pub(crate) const ALL_TABLES: &[TableDefinition<'static, &'static str, &'static [
     PROJECTS,
     PROJECT_MEMBERS,
     PROJECT_INVITES,
+    billing_apply::OWNER_USAGE,
+    billing_apply::BUCKET_OWNERS,
+    billing_apply::OWNER_PROJECTS,
+    billing_apply::SUBSCRIPTIONS,
+    billing_apply::CREDITS,
+    billing_apply::LEDGER,
+    billing_apply::GIFT_CODES,
+    billing_apply::GIFT_CODE_HASHES,
+    billing_apply::GIFT_REDEMPTIONS,
+    billing_apply::CHECKOUTS,
     NODES,
     CLUSTER,
 ];
@@ -91,23 +102,33 @@ pub(crate) fn apply_metadata_command(
     cmd: MetadataCommand,
 ) -> Result<CommandResponse, MetaError> {
     match cmd {
-        MetadataCommand::CreateBucket(cmd) => create_bucket(db, cmd).map(|b| CommandResponse::Bucket(Box::new(b))),
-        MetadataCommand::DeleteBucket(name) => delete_bucket(db, &name).map(|_| CommandResponse::Unit),
+        MetadataCommand::CreateBucket(cmd) => {
+            create_bucket(db, cmd).map(|b| CommandResponse::Bucket(Box::new(b)))
+        }
+        MetadataCommand::DeleteBucket(name) => {
+            delete_bucket(db, &name).map(|_| CommandResponse::Unit)
+        }
         MetadataCommand::CommitManifest(manifest) => {
             commit_manifest(db, *manifest).map(|m| CommandResponse::Manifest(Box::new(m)))
         }
         MetadataCommand::TombstoneObject(bucket_id, key) => {
             tombstone_object(db, bucket_id, &key).map(|_| CommandResponse::Unit)
         }
-        MetadataCommand::BeginMultipart(cmd) => begin_multipart(db, cmd).map(CommandResponse::UploadId),
+        MetadataCommand::BeginMultipart(cmd) => {
+            begin_multipart(db, cmd).map(CommandResponse::UploadId)
+        }
         MetadataCommand::RecordPart(upload_id, part) => {
             record_part(db, upload_id, *part).map(|_| CommandResponse::Unit)
         }
         MetadataCommand::CompleteMultipart(cmd) => {
             complete_multipart(db, *cmd).map(|m| CommandResponse::Manifest(Box::new(m)))
         }
-        MetadataCommand::AbortMultipart(upload_id) => abort_multipart(db, upload_id).map(|_| CommandResponse::Unit),
-        MetadataCommand::PutCredential(cred) => put_credential(db, *cred).map(|_| CommandResponse::Unit),
+        MetadataCommand::AbortMultipart(upload_id) => {
+            abort_multipart(db, upload_id).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::PutCredential(cred) => {
+            put_credential(db, *cred).map(|_| CommandResponse::Unit)
+        }
         MetadataCommand::DeleteCredential(access_key) => {
             delete_credential(db, &access_key).map(|_| CommandResponse::Unit)
         }
@@ -117,8 +138,9 @@ pub(crate) fn apply_metadata_command(
         MetadataCommand::SetUserAccess(user_id, access) => {
             set_user_access(db, user_id, access).map(|u| CommandResponse::User(Box::new(u)))
         }
-        MetadataCommand::CreateProject(resolved) => projects::create_project(db, *resolved)
-            .map(|p| CommandResponse::Project(Box::new(p))),
+        MetadataCommand::CreateProject(resolved) => {
+            projects::create_project(db, *resolved).map(|p| CommandResponse::Project(Box::new(p)))
+        }
         MetadataCommand::AdoptOwner(resolved) => {
             projects::adopt_owner(db, *resolved).map(|p| CommandResponse::Project(Box::new(p)))
         }
@@ -165,21 +187,58 @@ pub(crate) fn apply_metadata_command(
         MetadataCommand::DeleteSession(access_key) => {
             projects::delete_session(db, &access_key).map(|_| CommandResponse::Unit)
         }
-        MetadataCommand::BootstrapCluster(id) => bootstrap_cluster(db, id).map(|_| CommandResponse::Unit),
-        MetadataCommand::RegisterNode(cmd) => register_node(db, cmd).map(|n| CommandResponse::NodeInfo(Box::new(n))),
+        MetadataCommand::PayForProject(pay) => billing_apply::pay_for_project(db, *pay)
+            .map(|paid| CommandResponse::Paid(Box::new(paid))),
+        MetadataCommand::SetCancel(cancel) => billing_apply::set_cancel(db, *cancel)
+            .map(|sub| CommandResponse::Subscription(Box::new(sub))),
+        MetadataCommand::AdvanceSubscription(advance) => billing_apply::advance(db, *advance)
+            .map(|step| CommandResponse::Advanced(Box::new(step))),
+        MetadataCommand::CreateGiftCode(code) => billing_apply::create_gift_code(db, *code)
+            .map(|gift| CommandResponse::GiftCode(Box::new(gift))),
+        MetadataCommand::SetGiftCodeDisabled(id, disabled) => {
+            billing_apply::set_gift_code_disabled(db, id, disabled)
+                .map(|gift| CommandResponse::GiftCode(Box::new(gift)))
+        }
+        MetadataCommand::RedeemGiftCode(redeem) => {
+            billing_apply::redeem(db, *redeem).map(|done| CommandResponse::Redeemed(Box::new(done)))
+        }
+        MetadataCommand::CreateCheckout(new) => billing_apply::create_checkout(db, *new)
+            .map(|checkout| CommandResponse::Checkout(Box::new(checkout))),
+        MetadataCommand::CompleteCheckout(done) => billing_apply::complete_checkout(db, *done)
+            .map(|checkout| CommandResponse::Checkout(Box::new(checkout))),
+        MetadataCommand::RebuildDerivedIndexes => {
+            billing_apply::rebuild_derived_indexes(db).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::BootstrapCluster(id) => {
+            bootstrap_cluster(db, id).map(|_| CommandResponse::Unit)
+        }
+        MetadataCommand::RegisterNode(cmd) => {
+            register_node(db, cmd).map(|n| CommandResponse::NodeInfo(Box::new(n)))
+        }
         MetadataCommand::UpdateNodeState(node_id, state) => {
             update_node_state(db, node_id, state).map(|_| CommandResponse::Unit)
         }
     }
 }
 
-pub(crate) fn create_bucket(db: &Database, resolved: ResolvedCreateBucket) -> Result<Bucket, MetaError> {
-    let ResolvedCreateBucket { cmd, bucket_id, created_at } = resolved;
+pub(crate) fn create_bucket(
+    db: &Database,
+    resolved: ResolvedCreateBucket,
+) -> Result<Bucket, MetaError> {
+    let ResolvedCreateBucket {
+        cmd,
+        bucket_id,
+        created_at,
+    } = resolved;
     let write_txn = db.begin_write().map_err(db_err)?;
+    billing_apply::require_writable(&write_txn, cmd.owner_id)?;
+    billing_apply::index_bucket(&write_txn, bucket_id, Some(cmd.owner_id))?;
     let bucket = {
         let mut table = write_txn.open_table(BUCKETS).map_err(db_err)?;
         if table.get(cmd.name.as_str()).map_err(db_err)?.is_some() {
-            return Err(MetaError::BucketAlreadyExists(cmd.name.as_str().to_string()));
+            return Err(MetaError::BucketAlreadyExists(
+                cmd.name.as_str().to_string(),
+            ));
         }
         let bucket = Bucket {
             bucket_id,
@@ -226,6 +285,11 @@ pub(crate) fn delete_bucket(db: &Database, name: &BucketName) -> Result<(), Meta
         }
 
         buckets.remove(name.as_str()).map_err(db_err)?;
+        drop(buckets);
+        if let Some(owner) = billing_apply::owner_of_bucket(&write_txn, bucket_id)? {
+            billing_apply::require_writable(&write_txn, owner)?;
+        }
+        billing_apply::index_bucket(&write_txn, bucket_id, None)?;
     }
     write_txn.commit().map_err(db_err)?;
     Ok(())
@@ -302,11 +366,30 @@ pub(crate) fn storage_stats(db: &Database) -> Result<StorageStats, MetaError> {
     Ok(stats)
 }
 
-pub(crate) fn commit_manifest(db: &Database, manifest: ObjectManifest) -> Result<ObjectManifest, MetaError> {
+pub(crate) fn commit_manifest(
+    db: &Database,
+    manifest: ObjectManifest,
+) -> Result<ObjectManifest, MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
+    let row_key = object_row_key(manifest.bucket_id, &manifest.key);
+    let replaced: Option<ObjectManifest> = {
+        let objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
+        projects::read_row(&objects, &row_key)?
+    };
+    // Checked here, in the step that stores it, so uploads finishing at the same moment
+    // can't together go over the limit. Replacing an object only counts the difference.
+    if let Some(owner) = billing_apply::owner_of_bucket(&write_txn, manifest.bucket_id)? {
+        let old = replaced.as_ref().map_or(0, |m| m.total_size());
+        billing_apply::change_usage(
+            &write_txn,
+            owner,
+            manifest.total_size() as i64 - old as i64,
+            i64::from(replaced.is_none()),
+            0,
+        )?;
+    }
     {
         let mut objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
-        let row_key = object_row_key(manifest.bucket_id, &manifest.key);
         let bytes = serde_json::to_vec(&manifest)?;
         objects
             .insert(row_key.as_str(), bytes.as_slice())
@@ -330,18 +413,35 @@ pub(crate) fn get_manifest(
     }
 }
 
-pub(crate) fn tombstone_object(db: &Database, bucket_id: BucketId, key: &ObjectKey) -> Result<(), MetaError> {
+pub(crate) fn tombstone_object(
+    db: &Database,
+    bucket_id: BucketId,
+    key: &ObjectKey,
+) -> Result<(), MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
-    {
+    let owner = billing_apply::owner_of_bucket(&write_txn, bucket_id)?;
+    if let Some(owner) = owner {
+        billing_apply::require_writable(&write_txn, owner)?;
+    }
+    let removed: Option<ObjectManifest> = {
         let mut objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
         let row_key = object_row_key(bucket_id, key);
-        objects.remove(row_key.as_str()).map_err(db_err)?;
+        match objects.remove(row_key.as_str()).map_err(db_err)? {
+            Some(guard) => Some(serde_json::from_slice(guard.value())?),
+            None => None,
+        }
+    };
+    if let (Some(owner), Some(removed)) = (owner, removed) {
+        billing_apply::release_usage(&write_txn, owner, removed.total_size(), 1, 0)?;
     }
     write_txn.commit().map_err(db_err)?;
     Ok(())
 }
 
-pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<ListObjectsPage, MetaError> {
+pub(crate) fn list_objects(
+    db: &Database,
+    query: ListObjectsQuery,
+) -> Result<ListObjectsPage, MetaError> {
     let read_txn = db.begin_read().map_err(db_err)?;
     let table = read_txn.open_table(OBJECTS).map_err(db_err)?;
 
@@ -353,11 +453,16 @@ pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<Lis
         .start_after
         .clone()
         .map(|k| format!("{bucket_prefix}{k}"));
-    let (range_start, exclusive_boundary): (String, Option<String>) = match &query.continuation_token {
+    let (range_start, exclusive_boundary): (String, Option<String>) = match &query
+        .continuation_token
+    {
         Some(token) => {
             let key = crate::cursor::decode(token).ok_or(MetaError::InvalidContinuationToken)?;
             // Never resume before the requested prefix, whatever the token says.
-            (format!("{bucket_prefix}{key}").max(full_prefix.clone()), None)
+            (
+                format!("{bucket_prefix}{key}").max(full_prefix.clone()),
+                None,
+            )
         }
         None => match &start_after_boundary {
             Some(boundary) => (boundary.clone(), Some(boundary.clone())),
@@ -426,9 +531,19 @@ pub(crate) fn list_objects(db: &Database, query: ListObjectsQuery) -> Result<Lis
     })
 }
 
-pub(crate) fn begin_multipart(db: &Database, resolved: ResolvedBeginMultipart) -> Result<UploadId, MetaError> {
-    let ResolvedBeginMultipart { cmd, upload_id, initiated_at } = resolved;
+pub(crate) fn begin_multipart(
+    db: &Database,
+    resolved: ResolvedBeginMultipart,
+) -> Result<UploadId, MetaError> {
+    let ResolvedBeginMultipart {
+        cmd,
+        upload_id,
+        initiated_at,
+    } = resolved;
     let write_txn = db.begin_write().map_err(db_err)?;
+    if let Some(owner) = billing_apply::owner_of_bucket(&write_txn, cmd.bucket_id)? {
+        billing_apply::require_writable(&write_txn, owner)?;
+    }
     {
         let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
         let state = MultipartUploadState {
@@ -461,18 +576,26 @@ pub(crate) fn get_upload(
     }
 }
 
-pub(crate) fn record_part(db: &Database, upload_id: UploadId, part: PartManifest) -> Result<(), MetaError> {
+pub(crate) fn record_part(
+    db: &Database,
+    upload_id: UploadId,
+    part: PartManifest,
+) -> Result<(), MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
+    let key = upload_id.to_string();
+    let mut state: MultipartUploadState = {
+        let table = write_txn.open_table(MULTIPART).map_err(db_err)?;
+        projects::read_row(&table, &key)?
+            .ok_or_else(|| MetaError::NoSuchUpload(upload_id.to_string()))?
+    };
+    // A part counts as soon as it's stored, so uploads in progress can't together go over
+    // the limit. Sending a part again only counts the difference.
+    if let Some(owner) = billing_apply::owner_of_bucket(&write_txn, state.bucket_id)? {
+        let old = state.parts.get(&part.part_number).map_or(0, |p| p.size);
+        billing_apply::change_usage(&write_txn, owner, 0, 0, part.size as i64 - old as i64)?;
+    }
     {
         let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
-        let key = upload_id.to_string();
-        let mut state: MultipartUploadState = {
-            let guard = table
-                .get(key.as_str())
-                .map_err(db_err)?
-                .ok_or_else(|| MetaError::NoSuchUpload(upload_id.to_string()))?;
-            serde_json::from_slice(guard.value())?
-        };
         state.parts.insert(part.part_number, part);
         let bytes = serde_json::to_vec(&state)?;
         table
@@ -483,7 +606,10 @@ pub(crate) fn record_part(db: &Database, upload_id: UploadId, part: PartManifest
     Ok(())
 }
 
-pub(crate) fn list_parts(db: &Database, upload_id: UploadId) -> Result<Vec<PartSummary>, MetaError> {
+pub(crate) fn list_parts(
+    db: &Database,
+    upload_id: UploadId,
+) -> Result<Vec<PartSummary>, MetaError> {
     let read_txn = db.begin_read().map_err(db_err)?;
     let table = read_txn.open_table(MULTIPART).map_err(db_err)?;
     let key = upload_id.to_string();
@@ -503,8 +629,16 @@ pub(crate) fn list_parts(db: &Database, upload_id: UploadId) -> Result<Vec<PartS
         .collect())
 }
 
-pub(crate) fn complete_multipart(db: &Database, resolved: ResolvedCompleteMultipart) -> Result<ObjectManifest, MetaError> {
-    let ResolvedCompleteMultipart { cmd, object_id, version_id, created_at } = resolved;
+pub(crate) fn complete_multipart(
+    db: &Database,
+    resolved: ResolvedCompleteMultipart,
+) -> Result<ObjectManifest, MetaError> {
+    let ResolvedCompleteMultipart {
+        cmd,
+        object_id,
+        version_id,
+        created_at,
+    } = resolved;
     let write_txn = db.begin_write().map_err(db_err)?;
     let manifest = {
         let mut multipart = write_txn.open_table(MULTIPART).map_err(db_err)?;
@@ -580,8 +714,44 @@ pub(crate) fn complete_multipart(db: &Database, resolved: ResolvedCompleteMultip
         };
 
         multipart.remove(key.as_str()).map_err(db_err)?;
-        manifest
+        (manifest, state.parts.values().map(|p| p.size).sum::<u64>())
     };
+    let (manifest, recorded_bytes) = manifest;
+
+    // Every recorded part was counted when it arrived, and the object can only be made of
+    // them, so finishing never adds usage: it turns parts into an object and frees the
+    // parts that weren't used.
+    {
+        let row_key = object_row_key(manifest.bucket_id, &manifest.key);
+        let replaced: Option<ObjectManifest> = {
+            let objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
+            projects::read_row(&objects, &row_key)?
+        };
+        if let Some(owner) = billing_apply::owner_of_bucket(&write_txn, manifest.bucket_id)? {
+            billing_apply::require_writable(&write_txn, owner)?;
+            let old = replaced.as_ref().map_or(0, |m| m.total_size());
+            billing_apply::release_usage(
+                &write_txn,
+                owner,
+                old,
+                u64::from(replaced.is_some()),
+                recorded_bytes,
+            )?;
+            let current = billing_apply::usage(&write_txn, owner)?;
+            let mut table = write_txn
+                .open_table(billing_apply::OWNER_USAGE)
+                .map_err(db_err)?;
+            projects::write_row(
+                &mut table,
+                &owner.to_string(),
+                &crate::billing::OwnerUsage {
+                    bytes: current.bytes + manifest.total_size(),
+                    objects: current.objects + 1,
+                    pending_bytes: current.pending_bytes,
+                },
+            )?;
+        }
+    }
 
     {
         let mut objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
@@ -598,11 +768,21 @@ pub(crate) fn complete_multipart(db: &Database, resolved: ResolvedCompleteMultip
 
 pub(crate) fn abort_multipart(db: &Database, upload_id: UploadId) -> Result<(), MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
-    {
+    let removed: Option<MultipartUploadState> = {
         let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
-        table
+        match table
             .remove(upload_id.to_string().as_str())
-            .map_err(db_err)?;
+            .map_err(db_err)?
+        {
+            Some(guard) => Some(serde_json::from_slice(guard.value())?),
+            None => None,
+        }
+    };
+    if let Some(upload) = removed
+        && let Some(owner) = billing_apply::owner_of_bucket(&write_txn, upload.bucket_id)?
+    {
+        let bytes = upload.parts.values().map(|p| p.size).sum();
+        billing_apply::release_usage(&write_txn, owner, 0, 0, bytes)?;
     }
     write_txn.commit().map_err(db_err)?;
     Ok(())
@@ -621,7 +801,10 @@ pub(crate) fn put_credential(db: &Database, cred: Credential) -> Result<(), Meta
     Ok(())
 }
 
-pub(crate) fn get_credential(db: &Database, access_key: &str) -> Result<Option<Credential>, MetaError> {
+pub(crate) fn get_credential(
+    db: &Database,
+    access_key: &str,
+) -> Result<Option<Credential>, MetaError> {
     let read_txn = db.begin_read().map_err(db_err)?;
     let table = read_txn.open_table(CREDENTIALS).map_err(db_err)?;
     match table.get(access_key).map_err(db_err)? {
@@ -655,7 +838,11 @@ pub(crate) fn record_user_sign_in(
     db: &Database,
     resolved: ResolvedUserSignIn,
 ) -> Result<User, MetaError> {
-    let ResolvedUserSignIn { sign_in, user_id, at } = resolved;
+    let ResolvedUserSignIn {
+        sign_in,
+        user_id,
+        at,
+    } = resolved;
     let subject_key = format!("{}\0{}", sign_in.issuer, sign_in.subject);
 
     let write_txn = db.begin_write().map_err(db_err)?;
@@ -694,7 +881,6 @@ pub(crate) fn record_user_sign_in(
                     email_verified: sign_in.email_verified,
                     name: sign_in.name,
                     enabled: true,
-                    can_create_projects: false,
                     created_at: at,
                     last_sign_in_at: at,
                 }
@@ -744,9 +930,10 @@ pub(crate) fn set_user_access(
             None => return Err(MetaError::NoSuchUser(key)),
         };
         user.enabled = access.enabled;
-        user.can_create_projects = access.can_create_projects;
         let bytes = serde_json::to_vec(&user)?;
-        table.insert(key.as_str(), bytes.as_slice()).map_err(db_err)?;
+        table
+            .insert(key.as_str(), bytes.as_slice())
+            .map_err(db_err)?;
         user
     };
     if !access.enabled {
@@ -777,7 +964,9 @@ pub(crate) fn bootstrap_cluster(db: &Database, cluster_id: ClusterId) -> Result<
             Some(_) => {}
             None => {
                 let bytes = serde_json::to_vec(&cluster_id)?;
-                table.insert(CLUSTER_ID_KEY, bytes.as_slice()).map_err(db_err)?;
+                table
+                    .insert(CLUSTER_ID_KEY, bytes.as_slice())
+                    .map_err(db_err)?;
             }
         }
     }
@@ -858,14 +1047,20 @@ pub(crate) fn register_node(db: &Database, cmd: RegisterNode) -> Result<NodeInfo
             volumes: cmd.volumes,
         };
         let bytes = serde_json::to_vec(&info)?;
-        table.insert(key.as_str(), bytes.as_slice()).map_err(db_err)?;
+        table
+            .insert(key.as_str(), bytes.as_slice())
+            .map_err(db_err)?;
         info
     };
     write_txn.commit().map_err(db_err)?;
     Ok(info)
 }
 
-pub(crate) fn update_node_state(db: &Database, node_id: NodeId, state: NodeState) -> Result<(), MetaError> {
+pub(crate) fn update_node_state(
+    db: &Database,
+    node_id: NodeId,
+    state: NodeState,
+) -> Result<(), MetaError> {
     let write_txn = db.begin_write().map_err(db_err)?;
     {
         let mut table = write_txn.open_table(NODES).map_err(db_err)?;
@@ -878,7 +1073,9 @@ pub(crate) fn update_node_state(db: &Database, node_id: NodeId, state: NodeState
         info.state = state;
         info.last_seen = OffsetDateTime::now_utc();
         let bytes = serde_json::to_vec(&info)?;
-        table.insert(key.as_str(), bytes.as_slice()).map_err(db_err)?;
+        table
+            .insert(key.as_str(), bytes.as_slice())
+            .map_err(db_err)?;
     }
     write_txn.commit().map_err(db_err)?;
     Ok(())

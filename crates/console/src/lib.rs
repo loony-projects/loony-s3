@@ -7,6 +7,7 @@
 //! LS3 API itself. See docs/loony-auth-signin.md.
 
 mod auth;
+pub mod billing;
 mod error;
 mod handlers;
 mod oidc;
@@ -28,15 +29,19 @@ use loony_metadata::{MetaError, MetadataStore};
 use time::OffsetDateTime;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
+pub use billing::{BillingConfig, BillingMode, run_billing_loop, run_billing_once};
 pub use oidc::OidcClient;
 pub use projects::{MAX_ACCESS_KEYS_PER_PROJECT, MAX_PROJECTS_PER_USER};
-pub use ui::ui_router;
 use rate_limit::RateLimiter;
+pub use ui::ui_router;
 
 /// Far more than the sign-in request needs, which is a few short strings.
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
 const SIGN_IN_ATTEMPTS_PER_MINUTE: u32 = 30;
+
+/// Per person and per address. Codes can't be guessed, but this keeps anyone from trying.
+const REDEEM_ATTEMPTS_PER_MINUTE: u32 = 10;
 
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
@@ -55,6 +60,7 @@ pub struct ConsoleConfig {
     pub session_ttl: Duration,
     /// Header holding the real client address, set by a proxy all traffic goes through.
     pub client_ip_header: Option<String>,
+    pub billing: billing::BillingConfig,
 }
 
 /// Hand-written so the client secret can't end up in a log line.
@@ -82,6 +88,9 @@ pub struct ConsoleState {
     pub(crate) client_ip_header: Option<String>,
     pub(crate) rate_limiter: Arc<RateLimiter>,
     pub(crate) audit: Arc<AuditLog>,
+    pub(crate) billing: Arc<billing::BillingConfig>,
+    pub(crate) payments: Option<Arc<dyn billing::PaymentProvider>>,
+    pub(crate) redeem_limiter: Arc<RateLimiter>,
 }
 
 impl ConsoleState {
@@ -106,6 +115,15 @@ impl ConsoleState {
                 Duration::from_secs(60),
             )),
             audit,
+            payments: match config.billing.mode {
+                billing::BillingMode::Test => Some(Arc::new(billing::TestProvider)),
+                billing::BillingMode::Off => None,
+            },
+            billing: Arc::new(config.billing),
+            redeem_limiter: Arc::new(RateLimiter::new(
+                REDEEM_ATTEMPTS_PER_MINUTE,
+                Duration::from_secs(60),
+            )),
         })
     }
 
@@ -213,6 +231,40 @@ pub fn build_router(state: ConsoleState) -> Router {
             "/_console/v1/invites/:invite/decline",
             post(p::decline_invite),
         )
+        .route("/_console/v1/billing", get(billing::overview))
+        .route("/_console/v1/billing/ledger", get(billing::ledger))
+        .route(
+            "/_console/v1/billing/gift-codes/redeem",
+            post(billing::redeem),
+        )
+        .route(
+            "/_console/v1/billing/checkouts",
+            post(billing::create_checkout),
+        )
+        .route(
+            "/_console/v1/billing/checkouts/:checkout",
+            get(billing::get_checkout),
+        )
+        .route(
+            "/_console/v1/billing/checkouts/:checkout/confirm",
+            post(billing::confirm_checkout),
+        )
+        .route(
+            "/_console/v1/projects/:project/subscription",
+            get(billing::get_subscription).post(billing::create_subscription),
+        )
+        .route(
+            "/_console/v1/projects/:project/subscription/renew",
+            post(billing::renew_subscription),
+        )
+        .route(
+            "/_console/v1/projects/:project/subscription/cancel",
+            post(billing::cancel_subscription),
+        )
+        .route(
+            "/_console/v1/projects/:project/subscription/resume",
+            post(billing::resume_subscription),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,
@@ -220,6 +272,11 @@ pub fn build_router(state: ConsoleState) -> Router {
 
     Router::new()
         .route("/_console/v1/session", post(handlers::create_session))
+        // Payment providers call this themselves, so it isn't signed by a session.
+        .route(
+            "/_console/v1/billing/webhooks/:provider",
+            post(billing::webhook),
+        )
         .merge(protected)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::map_response(no_store))
@@ -323,6 +380,7 @@ mod tests {
             redirect_uris: vec![],
             session_ttl: Duration::from_secs(60),
             client_ip_header: None,
+            billing: Default::default(),
         };
         assert!(!format!("{config:?}").contains("do-not-print"));
     }

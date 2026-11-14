@@ -12,28 +12,38 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use md5::{Digest as _, Md5};
-use redb::{Database, ReadableTable, TableDefinition};
 use loony_core::{
-    Bucket, BucketId, BucketName, ClusterId, ETag, NodeId, NodeInfo, NodeState, ObjectId,
-    ObjectKey, ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, VersioningState, UserId, InviteId, ProjectId,
+    Bucket, BucketId, BucketName, CheckoutId, ClusterId, GiftCodeId, InviteId, LedgerEntryId,
+    NodeId, NodeInfo, NodeState, ObjectId, ObjectKey, ObjectManifest, OwnerId, PartManifest,
+    ProjectId, UploadId, UserId, VersionId,
 };
-use sha2::Sha256;
+use redb::{Database, ReadableTable, TableDefinition};
 use time::OffsetDateTime;
 
+use crate::billing::{
+    BillingTimings, Checkout, GiftCode, GiftCodeRedemption, LedgerEntry, NewCheckout, NewGiftCode,
+    OwnerUsage, Plan, Step, Subscription,
+};
 use crate::commands::{
-    BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    AdoptOwner, CreateInvite, CreateProject, MultipartUploadState, ObjectSummary, PartSummary,
-    Project, ProjectInvite, ProjectMember, ProjectRole, RegisterNode, StorageStats, User,
-    UserAccess, UserSignIn,
+    AdoptOwner, BeginMultipart, CompleteMultipart, CreateBucket, CreateInvite, CreateProject,
+    Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, ObjectSummary,
+    PartSummary, Project, ProjectInvite, ProjectMember, ProjectRole, RegisterNode, StorageStats,
+    User, UserAccess, UserSignIn,
 };
 use crate::error::MetaError;
 use crate::raft::applier;
+use crate::raft::billing_apply;
 use crate::raft::projects;
 use crate::raft::types::{
-    ResolvedAdoptOwner, ResolvedCreateInvite, ResolvedCreateProject, ResolvedInviteAnswer,
-    ResolvedTouchCredential, ResolvedUserSignIn,
+    ResolvedAdoptOwner, ResolvedAdvance, ResolvedBeginMultipart, ResolvedCancel,
+    ResolvedCompleteCheckout, ResolvedCompleteMultipart, ResolvedCreateBucket,
+    ResolvedCreateInvite, ResolvedCreateProject, ResolvedInviteAnswer, ResolvedNewCheckout,
+    ResolvedNewGiftCode, ResolvedPay, ResolvedRedeem, ResolvedTouchCredential, ResolvedUserSignIn,
 };
+
+fn now() -> OffsetDateTime {
+    OffsetDateTime::now_utc()
+}
 use crate::store::MetadataStore;
 
 const BUCKETS: TableDefinition<&str, &[u8]> = TableDefinition::new("buckets");
@@ -50,10 +60,6 @@ pub struct RedbMetadataStore {
 
 fn db_err<E: std::fmt::Display>(e: E) -> MetaError {
     MetaError::Db(e.to_string())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn object_row_prefix(bucket_id: BucketId) -> String {
@@ -76,10 +82,30 @@ impl RedbMetadataStore {
             write_txn.open_table(MULTIPART).map_err(db_err)?;
             write_txn.open_table(CREDENTIALS).map_err(db_err)?;
             write_txn.open_table(applier::USERS).map_err(db_err)?;
-            write_txn.open_table(applier::USER_SUBJECTS).map_err(db_err)?;
+            write_txn
+                .open_table(applier::USER_SUBJECTS)
+                .map_err(db_err)?;
             write_txn.open_table(applier::PROJECTS).map_err(db_err)?;
-            write_txn.open_table(applier::PROJECT_MEMBERS).map_err(db_err)?;
-            write_txn.open_table(applier::PROJECT_INVITES).map_err(db_err)?;
+            write_txn
+                .open_table(applier::PROJECT_MEMBERS)
+                .map_err(db_err)?;
+            write_txn
+                .open_table(applier::PROJECT_INVITES)
+                .map_err(db_err)?;
+            for table in [
+                billing_apply::OWNER_USAGE,
+                billing_apply::BUCKET_OWNERS,
+                billing_apply::OWNER_PROJECTS,
+                billing_apply::SUBSCRIPTIONS,
+                billing_apply::CREDITS,
+                billing_apply::LEDGER,
+                billing_apply::GIFT_CODES,
+                billing_apply::GIFT_CODE_HASHES,
+                billing_apply::GIFT_REDEMPTIONS,
+                billing_apply::CHECKOUTS,
+            ] {
+                write_txn.open_table(table).map_err(db_err)?;
+            }
             write_txn.open_table(NODES).map_err(db_err)?;
             write_txn.open_table(CLUSTER).map_err(db_err)?;
             write_txn.commit().map_err(db_err)?;
@@ -113,69 +139,19 @@ fn create_parent_dir(path: &Path) -> Result<(), MetaError> {
 #[async_trait]
 impl MetadataStore for RedbMetadataStore {
     async fn create_bucket(&self, cmd: CreateBucket) -> Result<Bucket, MetaError> {
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            let bucket = {
-                let mut table = write_txn.open_table(BUCKETS).map_err(db_err)?;
-                if table.get(cmd.name.as_str()).map_err(db_err)?.is_some() {
-                    return Err(MetaError::BucketAlreadyExists(
-                        cmd.name.as_str().to_string(),
-                    ));
-                }
-                let bucket = Bucket {
-                    bucket_id: BucketId::new(),
-                    name: cmd.name.clone(),
-                    owner_id: cmd.owner_id,
-                    created_at: OffsetDateTime::now_utc(),
-                    region: cmd.region,
-                    versioning_state: VersioningState::Disabled,
-                    quota_bytes: None,
-                };
-                let bytes = serde_json::to_vec(&bucket)?;
-                table
-                    .insert(cmd.name.as_str(), bytes.as_slice())
-                    .map_err(db_err)?;
-                bucket
-            };
-            write_txn.commit().map_err(db_err)?;
-            Ok(bucket)
-        })
-        .await
+        let resolved = ResolvedCreateBucket {
+            cmd,
+            bucket_id: BucketId::new(),
+            created_at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| applier::create_bucket(db, resolved))
+            .await
     }
 
     async fn delete_bucket(&self, name: &BucketName) -> Result<(), MetaError> {
         let name = name.clone();
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            {
-                let mut buckets = write_txn.open_table(BUCKETS).map_err(db_err)?;
-                let bucket_id = {
-                    let guard = buckets
-                        .get(name.as_str())
-                        .map_err(db_err)?
-                        .ok_or_else(|| MetaError::NoSuchBucket(name.as_str().to_string()))?;
-                    let bucket: Bucket = serde_json::from_slice(guard.value())?;
-                    bucket.bucket_id
-                };
-
-                {
-                    let objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
-                    let prefix = object_row_prefix(bucket_id);
-                    let mut range = objects.range(prefix.as_str()..).map_err(db_err)?;
-                    if let Some(entry) = range.next() {
-                        let (key_guard, _) = entry.map_err(db_err)?;
-                        if key_guard.value().starts_with(&prefix) {
-                            return Err(MetaError::BucketNotEmpty(name.as_str().to_string()));
-                        }
-                    }
-                }
-
-                buckets.remove(name.as_str()).map_err(db_err)?;
-            }
-            write_txn.commit().map_err(db_err)?;
-            Ok(())
-        })
-        .await
+        self.blocking(move |db| applier::delete_bucket(db, &name))
+            .await
     }
 
     async fn get_bucket(&self, name: &BucketName) -> Result<Option<Bucket>, MetaError> {
@@ -226,7 +202,8 @@ impl MetadataStore for RedbMetadataStore {
             owner_id: OwnerId::new(),
             at: OffsetDateTime::now_utc(),
         };
-        self.blocking(move |db| projects::create_project(db, resolved)).await
+        self.blocking(move |db| projects::create_project(db, resolved))
+            .await
     }
 
     async fn adopt_owner(&self, cmd: AdoptOwner) -> Result<Project, MetaError> {
@@ -235,11 +212,13 @@ impl MetadataStore for RedbMetadataStore {
             project_id: ProjectId::new(),
             at: OffsetDateTime::now_utc(),
         };
-        self.blocking(move |db| projects::adopt_owner(db, resolved)).await
+        self.blocking(move |db| projects::adopt_owner(db, resolved))
+            .await
     }
 
     async fn get_project(&self, project_id: ProjectId) -> Result<Option<Project>, MetaError> {
-        self.blocking(move |db| projects::get_project(db, project_id)).await
+        self.blocking(move |db| projects::get_project(db, project_id))
+            .await
     }
 
     async fn list_projects(&self) -> Result<Vec<Project>, MetaError> {
@@ -251,7 +230,8 @@ impl MetadataStore for RedbMetadataStore {
         project_id: ProjectId,
         name: String,
     ) -> Result<Project, MetaError> {
-        self.blocking(move |db| projects::rename_project(db, project_id, name)).await
+        self.blocking(move |db| projects::rename_project(db, project_id, name))
+            .await
     }
 
     async fn set_project_enabled(
@@ -259,11 +239,13 @@ impl MetadataStore for RedbMetadataStore {
         project_id: ProjectId,
         enabled: bool,
     ) -> Result<Project, MetaError> {
-        self.blocking(move |db| projects::set_project_enabled(db, project_id, enabled)).await
+        self.blocking(move |db| projects::set_project_enabled(db, project_id, enabled))
+            .await
     }
 
     async fn delete_project(&self, project_id: ProjectId) -> Result<(), MetaError> {
-        self.blocking(move |db| projects::delete_project(db, project_id)).await
+        self.blocking(move |db| projects::delete_project(db, project_id))
+            .await
     }
 
     async fn get_member(
@@ -271,18 +253,21 @@ impl MetadataStore for RedbMetadataStore {
         project_id: ProjectId,
         user_id: UserId,
     ) -> Result<Option<ProjectMember>, MetaError> {
-        self.blocking(move |db| projects::get_member(db, project_id, user_id)).await
+        self.blocking(move |db| projects::get_member(db, project_id, user_id))
+            .await
     }
 
     async fn list_members(&self, project_id: ProjectId) -> Result<Vec<ProjectMember>, MetaError> {
-        self.blocking(move |db| projects::list_members(db, project_id)).await
+        self.blocking(move |db| projects::list_members(db, project_id))
+            .await
     }
 
     async fn list_user_memberships(
         &self,
         user_id: UserId,
     ) -> Result<Vec<ProjectMember>, MetaError> {
-        self.blocking(move |db| projects::list_user_memberships(db, user_id)).await
+        self.blocking(move |db| projects::list_user_memberships(db, user_id))
+            .await
     }
 
     async fn set_member_role(
@@ -291,11 +276,13 @@ impl MetadataStore for RedbMetadataStore {
         user_id: UserId,
         role: ProjectRole,
     ) -> Result<ProjectMember, MetaError> {
-        self.blocking(move |db| projects::set_member_role(db, project_id, user_id, role)).await
+        self.blocking(move |db| projects::set_member_role(db, project_id, user_id, role))
+            .await
     }
 
     async fn remove_member(&self, project_id: ProjectId, user_id: UserId) -> Result<(), MetaError> {
-        self.blocking(move |db| projects::remove_member(db, project_id, user_id)).await
+        self.blocking(move |db| projects::remove_member(db, project_id, user_id))
+            .await
     }
 
     async fn create_invite(&self, cmd: CreateInvite) -> Result<ProjectInvite, MetaError> {
@@ -304,18 +291,21 @@ impl MetadataStore for RedbMetadataStore {
             invite_id: InviteId::new(),
             at: OffsetDateTime::now_utc(),
         };
-        self.blocking(move |db| projects::create_invite(db, resolved)).await
+        self.blocking(move |db| projects::create_invite(db, resolved))
+            .await
     }
 
     async fn get_invite(&self, invite_id: InviteId) -> Result<Option<ProjectInvite>, MetaError> {
-        self.blocking(move |db| projects::get_invite(db, invite_id)).await
+        self.blocking(move |db| projects::get_invite(db, invite_id))
+            .await
     }
 
     async fn list_project_invites(
         &self,
         project_id: ProjectId,
     ) -> Result<Vec<ProjectInvite>, MetaError> {
-        self.blocking(move |db| projects::list_project_invites(db, project_id)).await
+        self.blocking(move |db| projects::list_project_invites(db, project_id))
+            .await
     }
 
     async fn list_invites(&self) -> Result<Vec<ProjectInvite>, MetaError> {
@@ -323,7 +313,8 @@ impl MetadataStore for RedbMetadataStore {
     }
 
     async fn delete_invite(&self, invite_id: InviteId) -> Result<(), MetaError> {
-        self.blocking(move |db| projects::delete_invite(db, invite_id)).await
+        self.blocking(move |db| projects::delete_invite(db, invite_id))
+            .await
     }
 
     async fn accept_invite(
@@ -337,7 +328,9 @@ impl MetadataStore for RedbMetadataStore {
             accept: true,
             at: OffsetDateTime::now_utc(),
         };
-        let member = self.blocking(move |db| projects::answer_invite(db, answer)).await?;
+        let member = self
+            .blocking(move |db| projects::answer_invite(db, answer))
+            .await?;
         member.ok_or_else(|| MetaError::Db("accepting an invite returned no member".into()))
     }
 
@@ -348,7 +341,8 @@ impl MetadataStore for RedbMetadataStore {
             accept: false,
             at: OffsetDateTime::now_utc(),
         };
-        self.blocking(move |db| projects::answer_invite(db, answer)).await?;
+        self.blocking(move |db| projects::answer_invite(db, answer))
+            .await?;
         Ok(())
     }
 
@@ -380,16 +374,192 @@ impl MetadataStore for RedbMetadataStore {
             access_key: access_key.to_string(),
             at,
         };
-        self.blocking(move |db| projects::touch_credential(db, touch)).await
+        self.blocking(move |db| projects::touch_credential(db, touch))
+            .await
     }
 
     async fn delete_session(&self, access_key: &str) -> Result<(), MetaError> {
         let access_key = access_key.to_string();
-        self.blocking(move |db| projects::delete_session(db, &access_key)).await
+        self.blocking(move |db| projects::delete_session(db, &access_key))
+            .await
+    }
+
+    async fn get_subscription(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Option<Subscription>, MetaError> {
+        self.blocking(move |db| billing_apply::get_subscription(db, project_id))
+            .await
+    }
+
+    async fn list_subscriptions(&self) -> Result<Vec<Subscription>, MetaError> {
+        self.blocking(billing_apply::list_subscriptions).await
+    }
+
+    async fn pay_for_project(
+        &self,
+        project_id: ProjectId,
+        payer: UserId,
+        plan: Plan,
+    ) -> Result<(Subscription, LedgerEntry), MetaError> {
+        let pay = ResolvedPay {
+            project_id,
+            payer,
+            plan,
+            at: now(),
+            entry_id: LedgerEntryId::new(),
+        };
+        self.blocking(move |db| billing_apply::pay_for_project(db, pay))
+            .await
+    }
+
+    async fn set_subscription_cancelled(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+        cancel: bool,
+    ) -> Result<Subscription, MetaError> {
+        let change = ResolvedCancel {
+            project_id,
+            user_id,
+            cancel,
+            at: now(),
+        };
+        self.blocking(move |db| billing_apply::set_cancel(db, change))
+            .await
+    }
+
+    async fn advance_subscription(
+        &self,
+        expected: &Subscription,
+        timings: BillingTimings,
+        at: OffsetDateTime,
+    ) -> Result<Option<(Subscription, Step)>, MetaError> {
+        let advance = ResolvedAdvance {
+            project_id: expected.project_id,
+            expected_state: expected.state,
+            expected_period_end: expected.period_end,
+            timings,
+            at,
+            entry_id: LedgerEntryId::new(),
+        };
+        self.blocking(move |db| billing_apply::advance(db, advance))
+            .await
+    }
+
+    async fn get_usage(&self, owner: OwnerId) -> Result<OwnerUsage, MetaError> {
+        self.blocking(move |db| billing_apply::get_usage(db, owner))
+            .await
+    }
+
+    async fn check_write(&self, owner: OwnerId, additional: u64) -> Result<(), MetaError> {
+        self.blocking(move |db| billing_apply::check_write(db, owner, additional))
+            .await
+    }
+
+    async fn derived_indexes_built(&self) -> Result<bool, MetaError> {
+        self.blocking(billing_apply::derived_indexes_built).await
+    }
+
+    async fn rebuild_derived_indexes(&self) -> Result<(), MetaError> {
+        self.blocking(billing_apply::rebuild_derived_indexes).await
+    }
+
+    async fn get_balance(&self, user_id: UserId) -> Result<u64, MetaError> {
+        self.blocking(move |db| billing_apply::get_balance(db, user_id))
+            .await
+    }
+
+    async fn list_ledger(
+        &self,
+        user_id: UserId,
+        limit: usize,
+    ) -> Result<Vec<LedgerEntry>, MetaError> {
+        self.blocking(move |db| billing_apply::list_ledger(db, user_id, limit))
+            .await
+    }
+
+    async fn create_gift_code(&self, code: NewGiftCode) -> Result<GiftCode, MetaError> {
+        let new = ResolvedNewGiftCode {
+            code,
+            code_id: GiftCodeId::new(),
+            at: now(),
+        };
+        self.blocking(move |db| billing_apply::create_gift_code(db, new))
+            .await
+    }
+
+    async fn list_gift_codes(&self) -> Result<Vec<GiftCode>, MetaError> {
+        self.blocking(billing_apply::list_gift_codes).await
+    }
+
+    async fn set_gift_code_disabled(
+        &self,
+        code_id: GiftCodeId,
+        disabled: bool,
+    ) -> Result<GiftCode, MetaError> {
+        self.blocking(move |db| billing_apply::set_gift_code_disabled(db, code_id, disabled))
+            .await
+    }
+
+    async fn list_redemptions(
+        &self,
+        code_id: GiftCodeId,
+    ) -> Result<Vec<GiftCodeRedemption>, MetaError> {
+        self.blocking(move |db| billing_apply::list_redemptions(db, code_id))
+            .await
+    }
+
+    async fn redeem_gift_code(
+        &self,
+        code_hash: String,
+        user_id: UserId,
+    ) -> Result<(GiftCode, LedgerEntry), MetaError> {
+        let redeem = ResolvedRedeem {
+            code_hash,
+            user_id,
+            at: now(),
+            entry_id: LedgerEntryId::new(),
+        };
+        self.blocking(move |db| billing_apply::redeem(db, redeem))
+            .await
+    }
+
+    async fn create_checkout(&self, checkout: NewCheckout) -> Result<Checkout, MetaError> {
+        let new = ResolvedNewCheckout {
+            checkout,
+            checkout_id: CheckoutId::new(),
+            at: now(),
+        };
+        self.blocking(move |db| billing_apply::create_checkout(db, new))
+            .await
+    }
+
+    async fn get_checkout(&self, checkout_id: CheckoutId) -> Result<Option<Checkout>, MetaError> {
+        self.blocking(move |db| billing_apply::get_checkout(db, checkout_id))
+            .await
+    }
+
+    async fn complete_checkout(
+        &self,
+        checkout_id: CheckoutId,
+        succeeded: bool,
+        provider_ref: Option<String>,
+    ) -> Result<Checkout, MetaError> {
+        let done = ResolvedCompleteCheckout {
+            checkout_id,
+            succeeded,
+            provider_ref,
+            at: now(),
+            entry_id: LedgerEntryId::new(),
+        };
+        self.blocking(move |db| billing_apply::complete_checkout(db, done))
+            .await
     }
 
     async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError> {
-        self.blocking(move |db| applier::get_user(db, user_id)).await
+        self.blocking(move |db| applier::get_user(db, user_id))
+            .await
     }
 
     async fn list_users(&self) -> Result<Vec<User>, MetaError> {
@@ -424,20 +594,8 @@ impl MetadataStore for RedbMetadataStore {
     }
 
     async fn commit_manifest(&self, manifest: ObjectManifest) -> Result<ObjectManifest, MetaError> {
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            {
-                let mut objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
-                let row_key = object_row_key(manifest.bucket_id, &manifest.key);
-                let bytes = serde_json::to_vec(&manifest)?;
-                objects
-                    .insert(row_key.as_str(), bytes.as_slice())
-                    .map_err(db_err)?;
-            }
-            write_txn.commit().map_err(db_err)?;
-            Ok(manifest)
-        })
-        .await
+        self.blocking(move |db| applier::commit_manifest(db, manifest))
+            .await
     }
 
     async fn get_manifest(
@@ -464,17 +622,8 @@ impl MetadataStore for RedbMetadataStore {
         key: &ObjectKey,
     ) -> Result<(), MetaError> {
         let key = key.clone();
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            {
-                let mut objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
-                let row_key = object_row_key(bucket_id, &key);
-                objects.remove(row_key.as_str()).map_err(db_err)?;
-            }
-            write_txn.commit().map_err(db_err)?;
-            Ok(())
-        })
-        .await
+        self.blocking(move |db| applier::tombstone_object(db, bucket_id, &key))
+            .await
     }
 
     async fn list_objects(&self, query: ListObjectsQuery) -> Result<ListObjectsPage, MetaError> {
@@ -501,7 +650,10 @@ impl MetadataStore for RedbMetadataStore {
                         let key = crate::cursor::decode(token)
                             .ok_or(MetaError::InvalidContinuationToken)?;
                         // Never resume before the requested prefix, whatever the token says.
-                        (format!("{bucket_prefix}{key}").max(full_prefix.clone()), None)
+                        (
+                            format!("{bucket_prefix}{key}").max(full_prefix.clone()),
+                            None,
+                        )
                     }
                     None => match &start_after_boundary {
                         Some(boundary) => (boundary.clone(), Some(boundary.clone())),
@@ -573,29 +725,13 @@ impl MetadataStore for RedbMetadataStore {
     }
 
     async fn begin_multipart(&self, cmd: BeginMultipart) -> Result<UploadId, MetaError> {
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            let upload_id = UploadId::new();
-            {
-                let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
-                let state = MultipartUploadState {
-                    upload_id,
-                    bucket_id: cmd.bucket_id,
-                    key: cmd.key,
-                    content_type: cmd.content_type,
-                    user_metadata: cmd.user_metadata,
-                    initiated_at: OffsetDateTime::now_utc(),
-                    parts: Default::default(),
-                };
-                let bytes = serde_json::to_vec(&state)?;
-                table
-                    .insert(upload_id.to_string().as_str(), bytes.as_slice())
-                    .map_err(db_err)?;
-            }
-            write_txn.commit().map_err(db_err)?;
-            Ok(upload_id)
-        })
-        .await
+        let resolved = ResolvedBeginMultipart {
+            cmd,
+            upload_id: UploadId::new(),
+            initiated_at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| applier::begin_multipart(db, resolved))
+            .await
     }
 
     async fn get_upload(
@@ -614,28 +750,8 @@ impl MetadataStore for RedbMetadataStore {
     }
 
     async fn record_part(&self, upload_id: UploadId, part: PartManifest) -> Result<(), MetaError> {
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            {
-                let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
-                let key = upload_id.to_string();
-                let mut state: MultipartUploadState = {
-                    let guard = table
-                        .get(key.as_str())
-                        .map_err(db_err)?
-                        .ok_or_else(|| MetaError::NoSuchUpload(upload_id.to_string()))?;
-                    serde_json::from_slice(guard.value())?
-                };
-                state.parts.insert(part.part_number, part);
-                let bytes = serde_json::to_vec(&state)?;
-                table
-                    .insert(key.as_str(), bytes.as_slice())
-                    .map_err(db_err)?;
-            }
-            write_txn.commit().map_err(db_err)?;
-            Ok(())
-        })
-        .await
+        self.blocking(move |db| applier::record_part(db, upload_id, part))
+            .await
     }
 
     async fn list_parts(&self, upload_id: UploadId) -> Result<Vec<PartSummary>, MetaError> {
@@ -665,122 +781,19 @@ impl MetadataStore for RedbMetadataStore {
         &self,
         cmd: CompleteMultipart,
     ) -> Result<ObjectManifest, MetaError> {
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            let manifest = {
-                let mut multipart = write_txn.open_table(MULTIPART).map_err(db_err)?;
-                let key = cmd.upload_id.to_string();
-                let state: MultipartUploadState = {
-                    let guard = multipart
-                        .get(key.as_str())
-                        .map_err(db_err)?
-                        .ok_or_else(|| MetaError::NoSuchUpload(cmd.upload_id.to_string()))?;
-                    serde_json::from_slice(guard.value())?
-                };
-
-                let mut parts = Vec::with_capacity(cmd.requested_parts.len());
-                let mut last_part_number: Option<u32> = None;
-                for (part_number, etag_hex) in &cmd.requested_parts {
-                    if let Some(last) = last_part_number
-                        && *part_number <= last
-                    {
-                        return Err(MetaError::InvalidPartOrder);
-                    }
-                    last_part_number = Some(*part_number);
-
-                    let recorded = state.parts.get(part_number).ok_or(MetaError::InvalidPart)?;
-                    if hex(&recorded.etag_md5) != *etag_hex {
-                        return Err(MetaError::InvalidPart);
-                    }
-                    parts.push(recorded.clone());
-                }
-                if parts.is_empty() {
-                    return Err(MetaError::InvalidPart);
-                }
-
-                // Recompute cumulative offsets: parts are recorded independently (and
-                // may be re-uploaded out of order before Complete), so their stored
-                // `offset` isn't trustworthy until the final ordering is fixed here.
-                let mut offset = 0u64;
-                for part in &mut parts {
-                    part.offset = offset;
-                    offset += part.size;
-                }
-                let total_size = offset;
-
-                let mut combined_md5_input = Vec::with_capacity(parts.len() * 16);
-                for part in &parts {
-                    combined_md5_input.extend_from_slice(&part.etag_md5);
-                }
-                let combined_digest: [u8; 16] = Md5::digest(&combined_md5_input).into();
-                let etag = ETag::from_multipart_digests(combined_digest, parts.len());
-
-                // A multipart object's whole-body SHA-256 would require re-reading
-                // every part's bytes, exactly what multipart upload exists to avoid
-                // (prompt §27/§28). We instead hash the concatenation of each shard's
-                // already-computed checksum: deterministic and still catches manifest
-                // corruption, but it is not `SHA256(object bytes)` — documented
-                // compatibility difference, architecture.md §29.
-                let mut shard_checksums = Vec::new();
-                for part in &parts {
-                    for stripe in &part.stripes {
-                        for shard in &stripe.shards {
-                            shard_checksums.extend_from_slice(&shard.checksum);
-                        }
-                    }
-                }
-                let sha256: [u8; 32] = {
-                    use sha2::Digest as _;
-                    Sha256::digest(&shard_checksums).into()
-                };
-
-                let manifest = ObjectManifest {
-                    object_id: ObjectId::new(),
-                    bucket_id: state.bucket_id,
-                    key: state.key.clone(),
-                    version_id: VersionId::new(),
-                    size: total_size,
-                    etag,
-                    sha256,
-                    content_type: cmd.content_type,
-                    user_metadata: state.user_metadata.clone(),
-                    created_at: OffsetDateTime::now_utc(),
-                    delete_marker: false,
-                    parts,
-                };
-
-                multipart.remove(key.as_str()).map_err(db_err)?;
-                manifest
-            };
-
-            {
-                let mut objects = write_txn.open_table(OBJECTS).map_err(db_err)?;
-                let row_key = object_row_key(manifest.bucket_id, &manifest.key);
-                let bytes = serde_json::to_vec(&manifest)?;
-                objects
-                    .insert(row_key.as_str(), bytes.as_slice())
-                    .map_err(db_err)?;
-            }
-
-            write_txn.commit().map_err(db_err)?;
-            Ok(manifest)
-        })
-        .await
+        let resolved = ResolvedCompleteMultipart {
+            cmd,
+            object_id: ObjectId::new(),
+            version_id: VersionId::new(),
+            created_at: OffsetDateTime::now_utc(),
+        };
+        self.blocking(move |db| applier::complete_multipart(db, resolved))
+            .await
     }
 
     async fn abort_multipart(&self, upload_id: UploadId) -> Result<(), MetaError> {
-        self.blocking(move |db| {
-            let write_txn = db.begin_write().map_err(db_err)?;
-            {
-                let mut table = write_txn.open_table(MULTIPART).map_err(db_err)?;
-                table
-                    .remove(upload_id.to_string().as_str())
-                    .map_err(db_err)?;
-            }
-            write_txn.commit().map_err(db_err)?;
-            Ok(())
-        })
-        .await
+        self.blocking(move |db| applier::abort_multipart(db, upload_id))
+            .await
     }
 
     async fn put_credential(&self, cred: Credential) -> Result<(), MetaError> {
@@ -865,10 +878,8 @@ impl MetadataStore for RedbMetadataStore {
                     Some(guard) => Some(serde_json::from_slice(guard.value())?),
                     None => None,
                 };
-                let state = applier::registration_state(
-                    cmd.node_id,
-                    existing.as_ref().map(|n| n.state),
-                )?;
+                let state =
+                    applier::registration_state(cmd.node_id, existing.as_ref().map(|n| n.state))?;
                 let generation = existing.map_or(0, |n| n.generation + 1);
                 let info = NodeInfo {
                     node_id: cmd.node_id,
@@ -936,6 +947,11 @@ impl MetadataStore for RedbMetadataStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loony_core::ETag;
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
     use loony_core::{DurabilityPolicy, NodeId, ShardLocation, Stripe, VolumeId};
 
     async fn store() -> RedbMetadataStore {
@@ -1494,9 +1510,7 @@ mod tests {
         use loony_core::NodeState::{Draining, Healthy, Joining, Removed};
         let store = store().await;
         let node_id = NodeId::new();
-        let state = async |store: &RedbMetadataStore| {
-            store.list_nodes().await.unwrap()[0].state
-        };
+        let state = async |store: &RedbMetadataStore| store.list_nodes().await.unwrap()[0].state;
 
         store.register_node(register_cmd(node_id)).await.unwrap();
         store.update_node_state(node_id, Healthy).await.unwrap();
@@ -1526,7 +1540,10 @@ mod tests {
         // Removal is final.
         assert!(store.update_node_state(node_id, Joining).await.is_err());
         assert!(matches!(
-            store.register_node(register_cmd(node_id)).await.unwrap_err(),
+            store
+                .register_node(register_cmd(node_id))
+                .await
+                .unwrap_err(),
             MetaError::NodeRemoved(_)
         ));
     }

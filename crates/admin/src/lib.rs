@@ -35,16 +35,42 @@ pub fn build_router(state: AdminState) -> Router {
         .route("/admin/v1/overview", get(handlers::overview))
         .route("/admin/v1/nodes", get(handlers::list_nodes))
         .route("/admin/v1/nodes/:node_id/drain", post(handlers::drain_node))
-        .route("/admin/v1/nodes/:node_id/resume", post(handlers::resume_node))
-        .route("/admin/v1/nodes/:node_id/remove", post(handlers::remove_node))
+        .route(
+            "/admin/v1/nodes/:node_id/resume",
+            post(handlers::resume_node),
+        )
+        .route(
+            "/admin/v1/nodes/:node_id/remove",
+            post(handlers::remove_node),
+        )
+        .route(
+            "/admin/v1/gift-codes",
+            get(handlers::list_gift_codes).post(handlers::create_gift_code),
+        )
+        .route(
+            "/admin/v1/gift-codes/:code_id",
+            patch(handlers::update_gift_code),
+        )
         .route("/admin/v1/users", get(handlers::list_users))
         .route("/admin/v1/users/:user_id", patch(handlers::update_user))
         .route("/admin/v1/projects", get(handlers::list_projects))
-        .route("/admin/v1/projects/:project_id", patch(handlers::update_project))
-        .route("/admin/v1/projects/adoptable-owners", get(handlers::adoptable_owners))
-        .route("/admin/v1/projects/adopt-owner", post(handlers::adopt_owner))
+        .route(
+            "/admin/v1/projects/:project_id",
+            patch(handlers::update_project),
+        )
+        .route(
+            "/admin/v1/projects/adoptable-owners",
+            get(handlers::adoptable_owners),
+        )
+        .route(
+            "/admin/v1/projects/adopt-owner",
+            post(handlers::adopt_owner),
+        )
         .route("/admin/v1/buckets", get(handlers::list_buckets))
-        .route("/admin/v1/buckets/:name/objects", get(handlers::list_objects))
+        .route(
+            "/admin/v1/buckets/:name/objects",
+            get(handlers::list_objects),
+        )
         .route(
             "/admin/v1/credentials",
             get(handlers::list_credentials).post(handlers::create_credential),
@@ -81,7 +107,10 @@ fn is_local_origin(origin: &HeaderValue) -> bool {
         return false;
     };
     let host = if authority.starts_with('[') {
-        authority.split_once(']').map_or(authority, |(h, _)| h).trim_start_matches('[')
+        authority
+            .split_once(']')
+            .map_or(authority, |(h, _)| h)
+            .trim_start_matches('[')
     } else {
         authority.split(':').next().unwrap_or(authority)
     };
@@ -94,8 +123,15 @@ mod tests {
 
     #[test]
     fn only_loopback_origins_are_local() {
-        for origin in ["http://localhost:5173", "http://127.0.0.1:4173", "http://[::1]:5173"] {
-            assert!(is_local_origin(&HeaderValue::from_static(origin)), "{origin}");
+        for origin in [
+            "http://localhost:5173",
+            "http://127.0.0.1:4173",
+            "http://[::1]:5173",
+        ] {
+            assert!(
+                is_local_origin(&HeaderValue::from_static(origin)),
+                "{origin}"
+            );
         }
         for origin in [
             "https://s3.lovegood.in",
@@ -103,7 +139,10 @@ mod tests {
             "http://127.0.0.1.evil.example:5173",
             "null",
         ] {
-            assert!(!is_local_origin(&HeaderValue::from_static(origin)), "{origin}");
+            assert!(
+                !is_local_origin(&HeaderValue::from_static(origin)),
+                "{origin}"
+            );
         }
     }
 }

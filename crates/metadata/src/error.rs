@@ -31,6 +31,48 @@ pub enum MetaError {
     #[error("user {0} does not exist")]
     NoSuchUser(String),
 
+    #[error("this project's subscription is {0}, so it can't take on data")]
+    ProjectNotWritable(crate::billing::SubscriptionState),
+
+    #[error(
+        "this would use more storage than the plan allows ({used} of {limit} bytes used, {requested} more requested)"
+    )]
+    QuotaExceeded {
+        limit: u64,
+        used: u64,
+        requested: u64,
+    },
+
+    #[error("not enough credit: {balance} paise available, {needed} needed")]
+    InsufficientCredit { balance: u64, needed: u64 },
+
+    #[error("this project is already paid for")]
+    AlreadyPaid,
+
+    #[error("this project has no subscription to change")]
+    NoSubscription,
+
+    #[error("only a project Owner can do that")]
+    NotProjectOwner,
+
+    #[error("that gift code doesn't exist")]
+    NoSuchGiftCode,
+
+    #[error("that gift code has expired")]
+    GiftCodeExpired,
+
+    #[error("that gift code has been used up")]
+    GiftCodeUsedUp,
+
+    #[error("you've already redeemed that gift code")]
+    GiftCodeAlreadyRedeemed,
+
+    #[error("a gift code with that value already exists")]
+    GiftCodeExists,
+
+    #[error("that checkout doesn't exist")]
+    NoSuchCheckout,
+
     #[error("project {0} does not exist")]
     NoSuchProject(String),
 

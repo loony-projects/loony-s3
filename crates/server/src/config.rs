@@ -7,7 +7,7 @@ use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
 
 use clap::Parser;
-use loony_console::{ConsoleConfig, is_secure_url, origin_of};
+use loony_console::{BillingConfig, BillingMode, ConsoleConfig, is_secure_url, origin_of};
 use loony_core::NodeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -290,7 +290,78 @@ fn load_console_config(env: &impl EnvSource) -> Result<Option<ConsoleConfig>, Co
         redirect_uris,
         session_ttl: std::time::Duration::from_secs(session_ttl_secs),
         client_ip_header: get("LS3_TRUSTED_IP_HEADER"),
+        billing: load_billing_config(env)?,
     }))
+}
+
+fn load_billing_config(env: &impl EnvSource) -> Result<BillingConfig, ConfigError> {
+    let mode = match env.get("LS3_BILLING_MODE").as_deref().map(str::trim) {
+        None | Some("") | Some("off") => BillingMode::Off,
+        Some("test") => BillingMode::Test,
+        Some(other) => {
+            return Err(ConfigError::Invalid {
+                key: "LS3_BILLING_MODE",
+                value: other.to_string(),
+                reason: "must be off or test: real payments aren't supported yet".into(),
+            });
+        }
+    };
+    let mut billing = BillingConfig {
+        mode,
+        ..BillingConfig::default()
+    };
+    if let Some(raw) = env
+        .get("LS3_BILLING_PLANS")
+        .filter(|v| !v.trim().is_empty())
+    {
+        let plans: Vec<loony_metadata::Plan> =
+            serde_json::from_str(&raw).map_err(|e| ConfigError::Invalid {
+                key: "LS3_BILLING_PLANS",
+                value: raw.clone(),
+                reason: e.to_string(),
+            })?;
+        let mut ids = std::collections::HashSet::new();
+        let valid = !plans.is_empty()
+            && plans.iter().all(|p| {
+                ids.insert(p.id.clone())
+                    && !p.id.trim().is_empty()
+                    && p.price_paise > 0
+                    && p.storage_bytes > 0
+                    && match p.period {
+                        loony_metadata::BillingPeriod::Months(m) => m > 0,
+                        loony_metadata::BillingPeriod::Seconds(s) => s > 0,
+                    }
+            });
+        if !valid {
+            return Err(ConfigError::Invalid {
+                key: "LS3_BILLING_PLANS",
+                value: raw,
+                reason: "needs at least one plan, each with a unique id and a price, storage and period above zero".into(),
+            });
+        }
+        billing.plans = plans;
+    }
+    let secs = |key: &'static str, default: u64| -> Result<u64, ConfigError> {
+        match env.get(key) {
+            None => Ok(default),
+            Some(raw) => match raw.trim().parse::<u64>() {
+                Ok(value) if value > 0 => Ok(value),
+                _ => Err(ConfigError::Invalid {
+                    key,
+                    value: raw,
+                    reason: "must be a whole number of seconds above zero".into(),
+                }),
+            },
+        }
+    };
+    billing.timings.grace_secs = secs("LS3_BILLING_GRACE_SECS", billing.timings.grace_secs)?;
+    billing.timings.suspend_after_secs = secs(
+        "LS3_BILLING_SUSPEND_AFTER_SECS",
+        billing.timings.suspend_after_secs,
+    )?;
+    billing.tick =
+        std::time::Duration::from_secs(secs("LS3_BILLING_TICK_SECS", billing.tick.as_secs())?);
+    Ok(billing)
 }
 
 fn load_ui_config(env: &impl EnvSource) -> Result<Option<UiConfig>, ConfigError> {
@@ -631,5 +702,63 @@ mod tests {
             .ui
             .unwrap();
         assert_eq!(ui.addr.port(), 9999);
+    }
+
+    #[test]
+    fn billing_defaults_to_one_plan_and_no_checkout() {
+        let billing = standalone_with(&SIGN_IN).unwrap().console.unwrap().billing;
+        assert_eq!(billing.mode, BillingMode::Off);
+        assert_eq!(billing.plans.len(), 1);
+        assert_eq!(billing.plans[0].price_paise, 100_000);
+        assert_eq!(billing.plans[0].storage_bytes, 15 * 1024 * 1024 * 1024);
+        assert_eq!(billing.timings.grace_secs, 7 * 86400);
+        assert_eq!(billing.timings.suspend_after_secs, 30 * 86400);
+    }
+
+    #[test]
+    fn billing_settings_are_read_and_checked() {
+        let mut settings = SIGN_IN.to_vec();
+        settings.extend([
+            ("LS3_BILLING_MODE", "test"),
+            (
+                "LS3_BILLING_PLANS",
+                r#"[{"id":"tiny","name":"Tiny","price_paise":500,"storage_bytes":1000,"period":{"seconds":120}}]"#,
+            ),
+            ("LS3_BILLING_GRACE_SECS", "30"),
+            ("LS3_BILLING_SUSPEND_AFTER_SECS", "60"),
+            ("LS3_BILLING_TICK_SECS", "5"),
+        ]);
+        let billing = standalone_with(&settings).unwrap().console.unwrap().billing;
+        assert_eq!(billing.mode, BillingMode::Test);
+        assert_eq!(billing.plans[0].id, "tiny");
+        assert_eq!(
+            billing.plans[0].period,
+            loony_metadata::BillingPeriod::Seconds(120)
+        );
+        assert_eq!(billing.timings.grace_secs, 30);
+        assert_eq!(billing.tick.as_secs(), 5);
+
+        for (key, value) in [
+            ("LS3_BILLING_MODE", "live"),
+            ("LS3_BILLING_PLANS", "not json"),
+            ("LS3_BILLING_PLANS", "[]"),
+            (
+                "LS3_BILLING_PLANS",
+                r#"[{"id":"a","name":"A","price_paise":0,"storage_bytes":1,"period":{"months":1}}]"#,
+            ),
+            (
+                "LS3_BILLING_PLANS",
+                r#"[{"id":"a","name":"A","price_paise":1,"storage_bytes":1,"period":{"months":1}},{"id":"a","name":"B","price_paise":1,"storage_bytes":1,"period":{"months":1}}]"#,
+            ),
+            ("LS3_BILLING_GRACE_SECS", "0"),
+            ("LS3_BILLING_TICK_SECS", "soon"),
+        ] {
+            let mut settings = SIGN_IN.to_vec();
+            settings.push((key, value));
+            assert!(
+                matches!(standalone_with(&settings), Err(ConfigError::Invalid { .. })),
+                "{key}={value}"
+            );
+        }
     }
 }

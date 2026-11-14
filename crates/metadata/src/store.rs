@@ -5,10 +5,14 @@
 
 use async_trait::async_trait;
 use loony_core::{
-    Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectKey,
-    ObjectManifest, OwnerId, UploadId, UserId, InviteId, ProjectId,
+    Bucket, BucketId, BucketName, CheckoutId, ClusterId, GiftCodeId, InviteId, NodeId, NodeInfo,
+    NodeState, ObjectKey, ObjectManifest, OwnerId, ProjectId, UploadId, UserId,
 };
 
+use crate::billing::{
+    BillingTimings, Checkout, GiftCode, GiftCodeRedemption, LedgerEntry, NewCheckout, NewGiftCode,
+    OwnerUsage, Plan, Step, Subscription,
+};
 use crate::commands::{
     AdoptOwner, BeginMultipart, CompleteMultipart, CreateBucket, CreateInvite, CreateProject,
     Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, PartSummary, Project,
@@ -17,6 +21,7 @@ use crate::commands::{
 };
 use crate::error::MetaError;
 use loony_core::PartManifest;
+use time::OffsetDateTime;
 
 #[async_trait]
 pub trait MetadataStore: Send + Sync {
@@ -82,8 +87,11 @@ pub trait MetadataStore: Send + Sync {
     async fn adopt_owner(&self, cmd: AdoptOwner) -> Result<Project, MetaError>;
     async fn get_project(&self, project_id: ProjectId) -> Result<Option<Project>, MetaError>;
     async fn list_projects(&self) -> Result<Vec<Project>, MetaError>;
-    async fn rename_project(&self, project_id: ProjectId, name: String)
-    -> Result<Project, MetaError>;
+    async fn rename_project(
+        &self,
+        project_id: ProjectId,
+        name: String,
+    ) -> Result<Project, MetaError>;
     /// Disabling a project stops all its keys at once, and ends its session keys for good.
     async fn set_project_enabled(
         &self,
@@ -154,6 +162,76 @@ pub trait MetadataStore: Send + Sync {
     ) -> Result<(), MetaError>;
     /// Ends a user session and every project session key opened from it.
     async fn delete_session(&self, access_key: &str) -> Result<(), MetaError>;
+
+    // Billing ----------------------------------------------------------------
+
+    async fn get_subscription(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Option<Subscription>, MetaError>;
+    async fn list_subscriptions(&self) -> Result<Vec<Subscription>, MetaError>;
+    /// Pays for `project_id` from `payer`'s credit. `payer` must be one of its Owners.
+    async fn pay_for_project(
+        &self,
+        project_id: ProjectId,
+        payer: UserId,
+        plan: Plan,
+    ) -> Result<(Subscription, LedgerEntry), MetaError>;
+    /// `cancel` false undoes a cancel while the period is still running.
+    async fn set_subscription_cancelled(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+        cancel: bool,
+    ) -> Result<Subscription, MetaError>;
+    /// Moves a subscription on one step if one is due and it's still as `expected`.
+    async fn advance_subscription(
+        &self,
+        expected: &Subscription,
+        timings: BillingTimings,
+        at: OffsetDateTime,
+    ) -> Result<Option<(Subscription, Step)>, MetaError>;
+
+    async fn get_usage(&self, owner: OwnerId) -> Result<OwnerUsage, MetaError>;
+    /// Whether `owner` could store `additional` more bytes now. Writes check again for real.
+    async fn check_write(&self, owner: OwnerId, additional: u64) -> Result<(), MetaError>;
+    async fn derived_indexes_built(&self) -> Result<bool, MetaError>;
+    async fn rebuild_derived_indexes(&self) -> Result<(), MetaError>;
+
+    async fn get_balance(&self, user_id: UserId) -> Result<u64, MetaError>;
+    async fn list_ledger(
+        &self,
+        user_id: UserId,
+        limit: usize,
+    ) -> Result<Vec<LedgerEntry>, MetaError>;
+
+    async fn create_gift_code(&self, code: NewGiftCode) -> Result<GiftCode, MetaError>;
+    async fn list_gift_codes(&self) -> Result<Vec<GiftCode>, MetaError>;
+    async fn set_gift_code_disabled(
+        &self,
+        code_id: GiftCodeId,
+        disabled: bool,
+    ) -> Result<GiftCode, MetaError>;
+    async fn list_redemptions(
+        &self,
+        code_id: GiftCodeId,
+    ) -> Result<Vec<GiftCodeRedemption>, MetaError>;
+    /// `code_hash` is the SHA-256 of the normalised code, in hex.
+    async fn redeem_gift_code(
+        &self,
+        code_hash: String,
+        user_id: UserId,
+    ) -> Result<(GiftCode, LedgerEntry), MetaError>;
+
+    async fn create_checkout(&self, checkout: NewCheckout) -> Result<Checkout, MetaError>;
+    async fn get_checkout(&self, checkout_id: CheckoutId) -> Result<Option<Checkout>, MetaError>;
+    /// Records the outcome once. Later calls return the checkout as it is.
+    async fn complete_checkout(
+        &self,
+        checkout_id: CheckoutId,
+        succeeded: bool,
+        provider_ref: Option<String>,
+    ) -> Result<Checkout, MetaError>;
 
     /// Sets this store's cluster identity if it doesn't have one yet; idempotent (and
     /// safe to call again with the same id) once it does. Errors with

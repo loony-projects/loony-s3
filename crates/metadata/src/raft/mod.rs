@@ -3,14 +3,17 @@
 //! crate's top-level `lib.rs` doc and architecture.md §5).
 
 pub(crate) mod applier;
+pub(crate) mod billing_apply;
+#[cfg(test)]
+mod billing_tests;
 mod log_store;
 mod network;
+pub(crate) mod projects;
 mod snapshot;
 mod state_machine;
 mod store;
 #[cfg(test)]
 mod tests;
-pub(crate) mod projects;
 pub(crate) mod types;
 
 pub use network::NoopNetworkFactory;

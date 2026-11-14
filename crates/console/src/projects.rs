@@ -9,7 +9,7 @@ use loony_admin::AuditEntry;
 use loony_core::{InviteId, ProjectId, UserId};
 use loony_metadata::{
     CreateInvite, CreateProject, Credential, CredentialKind, Project, ProjectInvite, ProjectMember,
-    ProjectRole,
+    ProjectRole, SubscriptionState,
 };
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
@@ -151,17 +151,29 @@ pub struct ProjectView {
     created_by_me: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    subscription: SubscriptionState,
 }
 
-fn project_view(project: Project, role: ProjectRole, user_id: UserId) -> ProjectView {
-    ProjectView {
+async fn project_view(
+    state: &ConsoleState,
+    project: Project,
+    role: ProjectRole,
+    user_id: UserId,
+) -> Result<ProjectView> {
+    let subscription = state
+        .metadata
+        .get_subscription(project.project_id)
+        .await?
+        .map_or(SubscriptionState::Unpaid, |sub| sub.state);
+    Ok(ProjectView {
         id: project.project_id,
         name: project.name,
         enabled: project.enabled,
         role,
         created_by_me: project.created_by == user_id,
         created_at: project.created_at,
-    }
+        subscription,
+    })
 }
 
 #[derive(Serialize)]
@@ -219,7 +231,7 @@ pub async fn list_projects(
         let Some(project) = state.metadata.get_project(member.project_id).await? else {
             continue;
         };
-        let view = project_view(project, member.role, user.user_id);
+        let view = project_view(&state, project, member.role, user.user_id).await?;
         if view.created_by_me {
             created.push(view);
         } else {
@@ -269,13 +281,6 @@ pub async fn create_project(
 ) -> Result<(StatusCode, Json<ProjectView>)> {
     let user_id = signed_in.user.user_id;
     let result = async {
-        if !signed_in.user.can_create_projects {
-            return Err(ConsoleError::new(
-                StatusCode::FORBIDDEN,
-                "not_approved",
-                "An administrator has to approve your account before you can create projects.",
-            ));
-        }
         let name = clean_name(&parse_body(body)?.name, "A project name")?;
         Ok(state
             .metadata
@@ -294,7 +299,7 @@ pub async fn create_project(
     let project = audited(&state, &signed_in, "project.create", target, result).await?;
     Ok((
         StatusCode::CREATED,
-        Json(project_view(project, ProjectRole::Owner, user_id)),
+        Json(project_view(&state, project, ProjectRole::Owner, user_id).await?),
     ))
 }
 
@@ -305,7 +310,9 @@ pub async fn get_project(
 ) -> Result<Json<ProjectView>> {
     let user_id = signed_in.user.user_id;
     let (project, member) = access(&state, user_id, project_id, Need::Read).await?;
-    Ok(Json(project_view(project, member.role, user_id)))
+    Ok(Json(
+        project_view(&state, project, member.role, user_id).await?,
+    ))
 }
 
 pub async fn rename_project(
@@ -323,7 +330,9 @@ pub async fn rename_project(
     .await;
     let target = format!("project:{project_id}");
     let project = audited(&state, &signed_in, "project.rename", target, result).await?;
-    Ok(Json(project_view(project, ProjectRole::Owner, user_id)))
+    Ok(Json(
+        project_view(&state, project, ProjectRole::Owner, user_id).await?,
+    ))
 }
 
 pub async fn delete_project(
@@ -741,7 +750,7 @@ pub async fn accept_invite(
             .get_project(member.project_id)
             .await?
             .ok_or_else(not_found)?;
-        Ok(project_view(project, member.role, user_id))
+        project_view(&state, project, member.role, user_id).await
     }
     .await;
     let target = format!("invite:{invite_id}");

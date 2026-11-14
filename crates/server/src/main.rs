@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use clap::Parser;
 use config::{Cli, ClusterConfig, Config, Mode, ProcessEnv};
-use openraft::BasicNode;
 use loony_api::AppState;
 use loony_cluster::{ClusterIdentity, ClusterMembershipService, NodeIdentity};
 use loony_core::{ClusterId, NodeId};
@@ -23,6 +22,7 @@ use loony_object::{BucketService, ObjectService};
 use loony_observability::{LoggingConfig, init_tracing, install_recorder};
 use loony_rpc::HttpRaftNetworkFactory;
 use loony_storage::LocalVolumeManager;
+use openraft::BasicNode;
 use sha2::{Digest, Sha256};
 
 #[tokio::main]
@@ -97,8 +97,8 @@ async fn main() -> std::process::ExitCode {
     // store *uninitialized* and is added as a learner of the bootstrap node's group
     // below, in `start_cluster_mode` -- see that function's doc comment.
     let metadata_path = config.data_dir.join("meta.redb");
-    let is_joining = config.mode == Mode::Cluster
-        && config.cluster.as_ref().is_some_and(|c| !c.bootstrap);
+    let is_joining =
+        config.mode == Mode::Cluster && config.cluster.as_ref().is_some_and(|c| !c.bootstrap);
 
     // Resolved once here (rather than inside `start_cluster_mode`) because the token is
     // also needed to build this node's `HttpRaftNetworkFactory` before metadata can even
@@ -130,20 +130,24 @@ async fn main() -> std::process::ExitCode {
         },
         Some(cluster_config) => {
             let network = HttpRaftNetworkFactory::new(cluster_token.clone().unwrap());
-            let store = match RaftMetadataStore::open(identity.node_id, metadata_path, network).await {
-                Ok(store) => store,
-                Err(err) => {
-                    tracing::error!(%err, "failed to open metadata store");
-                    return std::process::ExitCode::FAILURE;
-                }
-            };
+            let store =
+                match RaftMetadataStore::open(identity.node_id, metadata_path, network).await {
+                    Ok(store) => store,
+                    Err(err) => {
+                        tracing::error!(%err, "failed to open metadata store");
+                        return std::process::ExitCode::FAILURE;
+                    }
+                };
             if cluster_config.bootstrap {
                 // Same effect as `open_single_node`, but over the real
                 // `HttpRaftNetworkFactory` this node will need once a peer joins it.
                 match store.raft().is_initialized().await {
                     Ok(false) => {
                         let mut members = BTreeMap::new();
-                        members.insert(identity.node_id, BasicNode::new(cluster_config.advertise_addr.clone()));
+                        members.insert(
+                            identity.node_id,
+                            BasicNode::new(cluster_config.advertise_addr.clone()),
+                        );
                         if let Err(err) = store.raft().initialize(members).await {
                             tracing::error!(%err, "failed to initialize metadata group");
                             return std::process::ExitCode::FAILURE;
@@ -168,11 +172,22 @@ async fn main() -> std::process::ExitCode {
     // leader (which a fresh learner never is) can commit a write at all. It doesn't
     // need to anyway: the credential already exists in the state it's about to
     // replicate from the group it's joining.
-    if !is_joining
-        && let Err(err) = seed_root_credential(&metadata, identity.node_id).await
-    {
+    if !is_joining && let Err(err) = seed_root_credential(&metadata, identity.node_id).await {
         tracing::error!(%err, "failed to seed root credential");
         return std::process::ExitCode::FAILURE;
+    }
+
+    // Storage limits count what's stored as it changes. Data from before that has to be
+    // counted once, and only a node that can write can do it.
+    if !is_joining {
+        match metadata.derived_indexes_built().await {
+            Ok(true) => {}
+            Ok(false) => match metadata.rebuild_derived_indexes().await {
+                Ok(()) => tracing::info!("counted existing storage for limits"),
+                Err(err) => tracing::warn!(%err, "couldn't count existing storage yet"),
+            },
+            Err(err) => tracing::warn!(%err, "couldn't check storage counters"),
+        }
     }
 
     // Cluster mode's PUT/GET path needs a shard store that can reach *other* nodes'
@@ -198,7 +213,9 @@ async fn main() -> std::process::ExitCode {
         volumes
     };
 
-    let audit = Arc::new(loony_admin::AuditLog::new(config.data_dir.join("audit.jsonl")));
+    let audit = Arc::new(loony_admin::AuditLog::new(
+        config.data_dir.join("audit.jsonl"),
+    ));
     let admin_router = loony_admin::build_router(loony_admin::AdminState {
         metadata: metadata.clone(),
         audit: audit.clone(),
@@ -218,7 +235,10 @@ async fn main() -> std::process::ExitCode {
         }
     };
     tracing::info!(addr = %config.admin_addr, "admin API listening");
-    eprintln!("server: admin API listening on http://{}", config.admin_addr);
+    eprintln!(
+        "server: admin API listening on http://{}",
+        config.admin_addr
+    );
     tokio::spawn(async move {
         if let Err(err) = axum::serve(admin_listener, admin_router).await {
             tracing::error!(%err, "admin API exited with an error");
@@ -257,11 +277,12 @@ async fn main() -> std::process::ExitCode {
     let mut router = loony_api::build_router(state);
 
     if let Some(console_config) = config.console.clone() {
+        let console_config_billing = console_config.billing.clone();
         let console_state = match loony_console::ConsoleState::new(
             console_config,
             metadata.clone(),
             config.region.clone(),
-            audit,
+            audit.clone(),
         ) {
             Ok(state) => state,
             Err(err) => {
@@ -270,7 +291,12 @@ async fn main() -> std::process::ExitCode {
             }
         };
         router = router.merge(loony_console::build_router(console_state));
-        tokio::spawn(loony_console::run_cleanup_loop(metadata));
+        tokio::spawn(loony_console::run_cleanup_loop(metadata.clone()));
+        tokio::spawn(loony_console::run_billing_loop(
+            metadata,
+            audit.clone(),
+            console_config_billing,
+        ));
         tracing::info!("sign-in enabled");
     }
 
@@ -293,7 +319,7 @@ async fn main() -> std::process::ExitCode {
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
-        .await
+    .await
     {
         tracing::error!(%err, "server exited with an error");
         return std::process::ExitCode::FAILURE;

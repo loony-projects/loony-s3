@@ -11,6 +11,7 @@
 //!   group (standalone mode), so standalone and cluster mode run the literal same code
 //!   path rather than an equivalence argument about it. See docs/architecture.md §5.
 
+pub mod billing;
 mod commands;
 mod cursor;
 mod error;
@@ -18,6 +19,11 @@ mod raft;
 mod redb_store;
 mod store;
 
+pub use billing::{
+    BillingPeriod, BillingTimings, Checkout, CheckoutStatus, GiftCode, GiftCodeRedemption,
+    LedgerEntry, LedgerReason, NewCheckout, NewGiftCode, OwnerUsage, Plan, Step, Subscription,
+    SubscriptionState,
+};
 pub use commands::{
     AdoptOwner, BeginMultipart, BucketUsage, CompleteMultipart, CreateBucket, CreateInvite,
     CreateProject, Credential, CredentialKind, ListObjectsPage, ListObjectsQuery,

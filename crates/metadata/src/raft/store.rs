@@ -14,28 +14,36 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use loony_core::{
+    Bucket, BucketId, BucketName, CheckoutId, ClusterId, GiftCodeId, InviteId, LedgerEntryId,
+    NodeId, NodeInfo, NodeState, ObjectId, ObjectKey, ObjectManifest, OwnerId, PartManifest,
+    ProjectId, UploadId, UserId, VersionId,
+};
 use openraft::{BasicNode, Config, Raft};
 use redb::Database;
-use loony_core::{
-    Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, OwnerId, PartManifest, UploadId, VersionId, UserId, InviteId, ProjectId,
-};
 
+use crate::billing::{
+    BillingTimings, Checkout, GiftCode, GiftCodeRedemption, LedgerEntry, NewCheckout, NewGiftCode,
+    OwnerUsage, Plan, Step, Subscription,
+};
 use crate::commands::{
-    BeginMultipart, CompleteMultipart, CreateBucket, Credential, ListObjectsPage, ListObjectsQuery,
-    AdoptOwner, CreateInvite, CreateProject, MultipartUploadState, PartSummary, Project,
+    AdoptOwner, BeginMultipart, CompleteMultipart, CreateBucket, CreateInvite, CreateProject,
+    Credential, ListObjectsPage, ListObjectsQuery, MultipartUploadState, PartSummary, Project,
     ProjectInvite, ProjectMember, ProjectRole, RegisterNode, StorageStats, User, UserAccess,
     UserSignIn,
 };
 use crate::error::MetaError;
 use crate::raft::applier::{self, db_err};
-use crate::raft::projects;
+use crate::raft::billing_apply;
 use crate::raft::log_store::RedbLogStore;
+use crate::raft::projects;
 use crate::raft::state_machine::RedbStateMachineStore;
 use crate::raft::types::{
-    CommandResponse, MetadataCommand, ResolvedBeginMultipart, ResolvedCompleteMultipart,
-    ResolvedAdoptOwner, ResolvedCreateBucket, ResolvedCreateInvite, ResolvedCreateProject,
-    ResolvedInviteAnswer, ResolvedTouchCredential, ResolvedUserSignIn, TypeConfig,
+    CommandResponse, MetadataCommand, ResolvedAdoptOwner, ResolvedAdvance, ResolvedBeginMultipart,
+    ResolvedCancel, ResolvedCompleteCheckout, ResolvedCompleteMultipart, ResolvedCreateBucket,
+    ResolvedCreateInvite, ResolvedCreateProject, ResolvedInviteAnswer, ResolvedNewCheckout,
+    ResolvedNewGiftCode, ResolvedPay, ResolvedRedeem, ResolvedTouchCredential, ResolvedUserSignIn,
+    TypeConfig,
 };
 use crate::store::MetadataStore;
 
@@ -69,7 +77,9 @@ fn create_tables(db: &Database) -> Result<(), MetaError> {
         .open_table(redb::TableDefinition::<&str, &[u8]>::new("raft_vote"))
         .map_err(db_err)?;
     write_txn
-        .open_table(redb::TableDefinition::<&str, &[u8]>::new("raft_last_purged"))
+        .open_table(redb::TableDefinition::<&str, &[u8]>::new(
+            "raft_last_purged",
+        ))
         .map_err(db_err)?;
     write_txn
         .open_table(redb::TableDefinition::<&str, &[u8]>::new("sm_meta"))
@@ -88,7 +98,11 @@ impl RaftMetadataStore {
     /// `client_write`/reads of not-yet-existing data behave accordingly) until the
     /// caller calls [`Self::raft`]`.initialize(...)` — see [`Self::open_single_node`]
     /// for the standalone convenience path that does this automatically.
-    pub async fn open<N>(node_id: NodeId, path: impl Into<PathBuf>, network: N) -> Result<Self, MetaError>
+    pub async fn open<N>(
+        node_id: NodeId,
+        path: impl Into<PathBuf>,
+        network: N,
+    ) -> Result<Self, MetaError>
     where
         N: openraft::network::RaftNetworkFactory<TypeConfig>,
     {
@@ -200,7 +214,9 @@ impl RaftMetadataStore {
         // indefinitely.
         let response = tokio::time::timeout(WRITE_TIMEOUT, self.raft.client_write(cmd))
             .await
-            .map_err(|_| MetaError::RaftUnavailable("write timed out waiting for consensus".into()))?
+            .map_err(|_| {
+                MetaError::RaftUnavailable("write timed out waiting for consensus".into())
+            })?
             .map_err(|e| MetaError::RaftUnavailable(e.to_string()))?;
         response.data
     }
@@ -210,6 +226,10 @@ impl RaftMetadataStore {
 /// comment). Comfortably above the default election timeout (150-300ms) so a normal
 /// leader failover during a write still succeeds once the new leader catches up.
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn now() -> time::OffsetDateTime {
+    time::OffsetDateTime::now_utc()
+}
 
 fn expect_project(response: CommandResponse) -> Result<Project, MetaError> {
     match response {
@@ -242,7 +262,8 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn delete_bucket(&self, name: &BucketName) -> Result<(), MetaError> {
-        self.write(MetadataCommand::DeleteBucket(name.clone())).await?;
+        self.write(MetadataCommand::DeleteBucket(name.clone()))
+            .await?;
         Ok(())
     }
 
@@ -279,10 +300,15 @@ impl MetadataStore for RaftMetadataStore {
         key: &ObjectKey,
     ) -> Result<Option<ObjectManifest>, MetaError> {
         let key = key.clone();
-        self.read(move |db| applier::get_manifest(db, bucket_id, &key)).await
+        self.read(move |db| applier::get_manifest(db, bucket_id, &key))
+            .await
     }
 
-    async fn tombstone_object(&self, bucket_id: BucketId, key: &ObjectKey) -> Result<(), MetaError> {
+    async fn tombstone_object(
+        &self,
+        bucket_id: BucketId,
+        key: &ObjectKey,
+    ) -> Result<(), MetaError> {
         self.write(MetadataCommand::TombstoneObject(bucket_id, key.clone()))
             .await?;
         Ok(())
@@ -298,14 +324,21 @@ impl MetadataStore for RaftMetadataStore {
             upload_id: UploadId::new(),
             initiated_at: time::OffsetDateTime::now_utc(),
         };
-        match self.write(MetadataCommand::BeginMultipart(resolved)).await? {
+        match self
+            .write(MetadataCommand::BeginMultipart(resolved))
+            .await?
+        {
             CommandResponse::UploadId(id) => Ok(id),
             _ => Err(unexpected_response()),
         }
     }
 
-    async fn get_upload(&self, upload_id: UploadId) -> Result<Option<MultipartUploadState>, MetaError> {
-        self.read(move |db| applier::get_upload(db, upload_id)).await
+    async fn get_upload(
+        &self,
+        upload_id: UploadId,
+    ) -> Result<Option<MultipartUploadState>, MetaError> {
+        self.read(move |db| applier::get_upload(db, upload_id))
+            .await
     }
 
     async fn record_part(&self, upload_id: UploadId, part: PartManifest) -> Result<(), MetaError> {
@@ -315,10 +348,14 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn list_parts(&self, upload_id: UploadId) -> Result<Vec<PartSummary>, MetaError> {
-        self.read(move |db| applier::list_parts(db, upload_id)).await
+        self.read(move |db| applier::list_parts(db, upload_id))
+            .await
     }
 
-    async fn complete_multipart(&self, cmd: CompleteMultipart) -> Result<ObjectManifest, MetaError> {
+    async fn complete_multipart(
+        &self,
+        cmd: CompleteMultipart,
+    ) -> Result<ObjectManifest, MetaError> {
         let resolved = ResolvedCompleteMultipart {
             cmd,
             object_id: ObjectId::new(),
@@ -335,18 +372,21 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn abort_multipart(&self, upload_id: UploadId) -> Result<(), MetaError> {
-        self.write(MetadataCommand::AbortMultipart(upload_id)).await?;
+        self.write(MetadataCommand::AbortMultipart(upload_id))
+            .await?;
         Ok(())
     }
 
     async fn put_credential(&self, cred: Credential) -> Result<(), MetaError> {
-        self.write(MetadataCommand::PutCredential(Box::new(cred))).await?;
+        self.write(MetadataCommand::PutCredential(Box::new(cred)))
+            .await?;
         Ok(())
     }
 
     async fn get_credential(&self, access_key: &str) -> Result<Option<Credential>, MetaError> {
         let access_key = access_key.to_string();
-        self.read(move |db| applier::get_credential(db, &access_key)).await
+        self.read(move |db| applier::get_credential(db, &access_key))
+            .await
     }
 
     async fn list_credentials(&self) -> Result<Vec<Credential>, MetaError> {
@@ -354,7 +394,8 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn delete_credential(&self, access_key: &str) -> Result<(), MetaError> {
-        self.write(MetadataCommand::DeleteCredential(access_key.to_string())).await?;
+        self.write(MetadataCommand::DeleteCredential(access_key.to_string()))
+            .await?;
         Ok(())
     }
 
@@ -364,7 +405,10 @@ impl MetadataStore for RaftMetadataStore {
             user_id: UserId::new(),
             at: time::OffsetDateTime::now_utc(),
         };
-        match self.write(MetadataCommand::RecordUserSignIn(Box::new(resolved))).await? {
+        match self
+            .write(MetadataCommand::RecordUserSignIn(Box::new(resolved)))
+            .await?
+        {
             CommandResponse::User(user) => Ok(*user),
             _ => Err(unexpected_response()),
         }
@@ -377,7 +421,10 @@ impl MetadataStore for RaftMetadataStore {
             owner_id: OwnerId::new(),
             at: time::OffsetDateTime::now_utc(),
         };
-        expect_project(self.write(MetadataCommand::CreateProject(Box::new(resolved))).await?)
+        expect_project(
+            self.write(MetadataCommand::CreateProject(Box::new(resolved)))
+                .await?,
+        )
     }
 
     async fn adopt_owner(&self, cmd: AdoptOwner) -> Result<Project, MetaError> {
@@ -386,11 +433,15 @@ impl MetadataStore for RaftMetadataStore {
             project_id: ProjectId::new(),
             at: time::OffsetDateTime::now_utc(),
         };
-        expect_project(self.write(MetadataCommand::AdoptOwner(Box::new(resolved))).await?)
+        expect_project(
+            self.write(MetadataCommand::AdoptOwner(Box::new(resolved)))
+                .await?,
+        )
     }
 
     async fn get_project(&self, project_id: ProjectId) -> Result<Option<Project>, MetaError> {
-        self.read(move |db| projects::get_project(db, project_id)).await
+        self.read(move |db| projects::get_project(db, project_id))
+            .await
     }
 
     async fn list_projects(&self) -> Result<Vec<Project>, MetaError> {
@@ -402,7 +453,10 @@ impl MetadataStore for RaftMetadataStore {
         project_id: ProjectId,
         name: String,
     ) -> Result<Project, MetaError> {
-        expect_project(self.write(MetadataCommand::RenameProject(project_id, name)).await?)
+        expect_project(
+            self.write(MetadataCommand::RenameProject(project_id, name))
+                .await?,
+        )
     }
 
     async fn set_project_enabled(
@@ -410,11 +464,15 @@ impl MetadataStore for RaftMetadataStore {
         project_id: ProjectId,
         enabled: bool,
     ) -> Result<Project, MetaError> {
-        expect_project(self.write(MetadataCommand::SetProjectEnabled(project_id, enabled)).await?)
+        expect_project(
+            self.write(MetadataCommand::SetProjectEnabled(project_id, enabled))
+                .await?,
+        )
     }
 
     async fn delete_project(&self, project_id: ProjectId) -> Result<(), MetaError> {
-        self.write(MetadataCommand::DeleteProject(project_id)).await?;
+        self.write(MetadataCommand::DeleteProject(project_id))
+            .await?;
         Ok(())
     }
 
@@ -423,18 +481,21 @@ impl MetadataStore for RaftMetadataStore {
         project_id: ProjectId,
         user_id: UserId,
     ) -> Result<Option<ProjectMember>, MetaError> {
-        self.read(move |db| projects::get_member(db, project_id, user_id)).await
+        self.read(move |db| projects::get_member(db, project_id, user_id))
+            .await
     }
 
     async fn list_members(&self, project_id: ProjectId) -> Result<Vec<ProjectMember>, MetaError> {
-        self.read(move |db| projects::list_members(db, project_id)).await
+        self.read(move |db| projects::list_members(db, project_id))
+            .await
     }
 
     async fn list_user_memberships(
         &self,
         user_id: UserId,
     ) -> Result<Vec<ProjectMember>, MetaError> {
-        self.read(move |db| projects::list_user_memberships(db, user_id)).await
+        self.read(move |db| projects::list_user_memberships(db, user_id))
+            .await
     }
 
     async fn set_member_role(
@@ -443,14 +504,18 @@ impl MetadataStore for RaftMetadataStore {
         user_id: UserId,
         role: ProjectRole,
     ) -> Result<ProjectMember, MetaError> {
-        match self.write(MetadataCommand::SetMemberRole(project_id, user_id, role)).await? {
+        match self
+            .write(MetadataCommand::SetMemberRole(project_id, user_id, role))
+            .await?
+        {
             CommandResponse::Member(member) => Ok(*member),
             _ => Err(unexpected_response()),
         }
     }
 
     async fn remove_member(&self, project_id: ProjectId, user_id: UserId) -> Result<(), MetaError> {
-        self.write(MetadataCommand::RemoveMember(project_id, user_id)).await?;
+        self.write(MetadataCommand::RemoveMember(project_id, user_id))
+            .await?;
         Ok(())
     }
 
@@ -460,21 +525,26 @@ impl MetadataStore for RaftMetadataStore {
             invite_id: InviteId::new(),
             at: time::OffsetDateTime::now_utc(),
         };
-        match self.write(MetadataCommand::CreateInvite(Box::new(resolved))).await? {
+        match self
+            .write(MetadataCommand::CreateInvite(Box::new(resolved)))
+            .await?
+        {
             CommandResponse::Invite(invite) => Ok(*invite),
             _ => Err(unexpected_response()),
         }
     }
 
     async fn get_invite(&self, invite_id: InviteId) -> Result<Option<ProjectInvite>, MetaError> {
-        self.read(move |db| projects::get_invite(db, invite_id)).await
+        self.read(move |db| projects::get_invite(db, invite_id))
+            .await
     }
 
     async fn list_project_invites(
         &self,
         project_id: ProjectId,
     ) -> Result<Vec<ProjectInvite>, MetaError> {
-        self.read(move |db| projects::list_project_invites(db, project_id)).await
+        self.read(move |db| projects::list_project_invites(db, project_id))
+            .await
     }
 
     async fn list_invites(&self) -> Result<Vec<ProjectInvite>, MetaError> {
@@ -497,7 +567,10 @@ impl MetadataStore for RaftMetadataStore {
             accept: true,
             at: time::OffsetDateTime::now_utc(),
         };
-        match self.write(MetadataCommand::AnswerInvite(Box::new(answer))).await? {
+        match self
+            .write(MetadataCommand::AnswerInvite(Box::new(answer)))
+            .await?
+        {
             CommandResponse::Member(member) => Ok(*member),
             _ => Err(unexpected_response()),
         }
@@ -510,7 +583,8 @@ impl MetadataStore for RaftMetadataStore {
             accept: false,
             at: time::OffsetDateTime::now_utc(),
         };
-        self.write(MetadataCommand::AnswerInvite(Box::new(answer))).await?;
+        self.write(MetadataCommand::AnswerInvite(Box::new(answer)))
+            .await?;
         Ok(())
     }
 
@@ -519,8 +593,11 @@ impl MetadataStore for RaftMetadataStore {
         credential: Credential,
         max_access_keys: u32,
     ) -> Result<(), MetaError> {
-        self.write(MetadataCommand::PutProjectCredential(Box::new(credential), max_access_keys))
-            .await?;
+        self.write(MetadataCommand::PutProjectCredential(
+            Box::new(credential),
+            max_access_keys,
+        ))
+        .await?;
         Ok(())
     }
 
@@ -529,8 +606,11 @@ impl MetadataStore for RaftMetadataStore {
         access_key: &str,
         enabled: bool,
     ) -> Result<(), MetaError> {
-        self.write(MetadataCommand::SetCredentialEnabled(access_key.to_string(), enabled))
-            .await?;
+        self.write(MetadataCommand::SetCredentialEnabled(
+            access_key.to_string(),
+            enabled,
+        ))
+        .await?;
         Ok(())
     }
 
@@ -543,13 +623,229 @@ impl MetadataStore for RaftMetadataStore {
             access_key: access_key.to_string(),
             at,
         };
-        self.write(MetadataCommand::TouchCredential(Box::new(touch))).await?;
+        self.write(MetadataCommand::TouchCredential(Box::new(touch)))
+            .await?;
         Ok(())
     }
 
     async fn delete_session(&self, access_key: &str) -> Result<(), MetaError> {
-        self.write(MetadataCommand::DeleteSession(access_key.to_string())).await?;
+        self.write(MetadataCommand::DeleteSession(access_key.to_string()))
+            .await?;
         Ok(())
+    }
+
+    async fn get_subscription(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Option<Subscription>, MetaError> {
+        self.read(move |db| billing_apply::get_subscription(db, project_id))
+            .await
+    }
+
+    async fn list_subscriptions(&self) -> Result<Vec<Subscription>, MetaError> {
+        self.read(billing_apply::list_subscriptions).await
+    }
+
+    async fn pay_for_project(
+        &self,
+        project_id: ProjectId,
+        payer: UserId,
+        plan: Plan,
+    ) -> Result<(Subscription, LedgerEntry), MetaError> {
+        let pay = ResolvedPay {
+            project_id,
+            payer,
+            plan,
+            at: now(),
+            entry_id: LedgerEntryId::new(),
+        };
+        match self
+            .write(MetadataCommand::PayForProject(Box::new(pay)))
+            .await?
+        {
+            CommandResponse::Paid(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn set_subscription_cancelled(
+        &self,
+        project_id: ProjectId,
+        user_id: UserId,
+        cancel: bool,
+    ) -> Result<Subscription, MetaError> {
+        let change = ResolvedCancel {
+            project_id,
+            user_id,
+            cancel,
+            at: now(),
+        };
+        match self
+            .write(MetadataCommand::SetCancel(Box::new(change)))
+            .await?
+        {
+            CommandResponse::Subscription(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn advance_subscription(
+        &self,
+        expected: &Subscription,
+        timings: BillingTimings,
+        at: time::OffsetDateTime,
+    ) -> Result<Option<(Subscription, Step)>, MetaError> {
+        let advance = ResolvedAdvance {
+            project_id: expected.project_id,
+            expected_state: expected.state,
+            expected_period_end: expected.period_end,
+            timings,
+            at,
+            entry_id: LedgerEntryId::new(),
+        };
+        match self
+            .write(MetadataCommand::AdvanceSubscription(Box::new(advance)))
+            .await?
+        {
+            CommandResponse::Advanced(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn get_usage(&self, owner: OwnerId) -> Result<OwnerUsage, MetaError> {
+        self.read(move |db| billing_apply::get_usage(db, owner))
+            .await
+    }
+
+    async fn check_write(&self, owner: OwnerId, additional: u64) -> Result<(), MetaError> {
+        self.read(move |db| billing_apply::check_write(db, owner, additional))
+            .await
+    }
+
+    async fn derived_indexes_built(&self) -> Result<bool, MetaError> {
+        self.read(billing_apply::derived_indexes_built).await
+    }
+
+    async fn rebuild_derived_indexes(&self) -> Result<(), MetaError> {
+        self.write(MetadataCommand::RebuildDerivedIndexes).await?;
+        Ok(())
+    }
+
+    async fn get_balance(&self, user_id: UserId) -> Result<u64, MetaError> {
+        self.read(move |db| billing_apply::get_balance(db, user_id))
+            .await
+    }
+
+    async fn list_ledger(
+        &self,
+        user_id: UserId,
+        limit: usize,
+    ) -> Result<Vec<LedgerEntry>, MetaError> {
+        self.read(move |db| billing_apply::list_ledger(db, user_id, limit))
+            .await
+    }
+
+    async fn create_gift_code(&self, code: NewGiftCode) -> Result<GiftCode, MetaError> {
+        let new = ResolvedNewGiftCode {
+            code,
+            code_id: GiftCodeId::new(),
+            at: now(),
+        };
+        match self
+            .write(MetadataCommand::CreateGiftCode(Box::new(new)))
+            .await?
+        {
+            CommandResponse::GiftCode(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn list_gift_codes(&self) -> Result<Vec<GiftCode>, MetaError> {
+        self.read(billing_apply::list_gift_codes).await
+    }
+
+    async fn set_gift_code_disabled(
+        &self,
+        code_id: GiftCodeId,
+        disabled: bool,
+    ) -> Result<GiftCode, MetaError> {
+        match self
+            .write(MetadataCommand::SetGiftCodeDisabled(code_id, disabled))
+            .await?
+        {
+            CommandResponse::GiftCode(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn list_redemptions(
+        &self,
+        code_id: GiftCodeId,
+    ) -> Result<Vec<GiftCodeRedemption>, MetaError> {
+        self.read(move |db| billing_apply::list_redemptions(db, code_id))
+            .await
+    }
+
+    async fn redeem_gift_code(
+        &self,
+        code_hash: String,
+        user_id: UserId,
+    ) -> Result<(GiftCode, LedgerEntry), MetaError> {
+        let redeem = ResolvedRedeem {
+            code_hash,
+            user_id,
+            at: now(),
+            entry_id: LedgerEntryId::new(),
+        };
+        match self
+            .write(MetadataCommand::RedeemGiftCode(Box::new(redeem)))
+            .await?
+        {
+            CommandResponse::Redeemed(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn create_checkout(&self, checkout: NewCheckout) -> Result<Checkout, MetaError> {
+        let new = ResolvedNewCheckout {
+            checkout,
+            checkout_id: CheckoutId::new(),
+            at: now(),
+        };
+        match self
+            .write(MetadataCommand::CreateCheckout(Box::new(new)))
+            .await?
+        {
+            CommandResponse::Checkout(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    async fn get_checkout(&self, checkout_id: CheckoutId) -> Result<Option<Checkout>, MetaError> {
+        self.read(move |db| billing_apply::get_checkout(db, checkout_id))
+            .await
+    }
+
+    async fn complete_checkout(
+        &self,
+        checkout_id: CheckoutId,
+        succeeded: bool,
+        provider_ref: Option<String>,
+    ) -> Result<Checkout, MetaError> {
+        let done = ResolvedCompleteCheckout {
+            checkout_id,
+            succeeded,
+            provider_ref,
+            at: now(),
+            entry_id: LedgerEntryId::new(),
+        };
+        match self
+            .write(MetadataCommand::CompleteCheckout(Box::new(done)))
+            .await?
+        {
+            CommandResponse::Checkout(value) => Ok(*value),
+            _ => Err(unexpected_response()),
+        }
     }
 
     async fn get_user(&self, user_id: UserId) -> Result<Option<User>, MetaError> {
@@ -565,14 +861,18 @@ impl MetadataStore for RaftMetadataStore {
         user_id: UserId,
         access: UserAccess,
     ) -> Result<User, MetaError> {
-        match self.write(MetadataCommand::SetUserAccess(user_id, access)).await? {
+        match self
+            .write(MetadataCommand::SetUserAccess(user_id, access))
+            .await?
+        {
             CommandResponse::User(user) => Ok(*user),
             _ => Err(unexpected_response()),
         }
     }
 
     async fn bootstrap_cluster(&self, cluster_id: ClusterId) -> Result<(), MetaError> {
-        self.write(MetadataCommand::BootstrapCluster(cluster_id)).await?;
+        self.write(MetadataCommand::BootstrapCluster(cluster_id))
+            .await?;
         Ok(())
     }
 
@@ -588,7 +888,8 @@ impl MetadataStore for RaftMetadataStore {
     }
 
     async fn update_node_state(&self, node_id: NodeId, state: NodeState) -> Result<(), MetaError> {
-        self.write(MetadataCommand::UpdateNodeState(node_id, state)).await?;
+        self.write(MetadataCommand::UpdateNodeState(node_id, state))
+            .await?;
         Ok(())
     }
 

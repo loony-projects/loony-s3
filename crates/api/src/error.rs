@@ -97,6 +97,10 @@ fn map_error(error: &Ls3Error) -> (StatusCode, &'static str, String) {
             "PreconditionFailed",
             "At least one of the preconditions you specified did not hold".into(),
         ),
+        Ls3Error::QuotaExceeded(reason) => (StatusCode::FORBIDDEN, "QuotaExceeded", reason.clone()),
+        Ls3Error::ProjectReadOnly(reason) => {
+            (StatusCode::FORBIDDEN, "ProjectReadOnly", reason.clone())
+        }
         Ls3Error::Meta(_) | Ls3Error::Storage(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",

@@ -39,9 +39,13 @@ impl App {
         let dir = tempfile::tempdir().unwrap();
         let node_id = NodeId::new();
         let store = Arc::new(
-            RaftMetadataStore::open_single_node(node_id, "self:9100".into(), dir.path().join("meta.redb"))
-                .await
-                .unwrap(),
+            RaftMetadataStore::open_single_node(
+                node_id,
+                "self:9100".into(),
+                dir.path().join("meta.redb"),
+            )
+            .await
+            .unwrap(),
         );
         for _ in 0..200 {
             if store.raft_status().leader == Some(node_id) {
@@ -84,19 +88,30 @@ impl App {
             mode: "standalone",
             started_at: OffsetDateTime::now_utc(),
         });
-        Self { router, store, node_id, user_owner, audit_path, _dir: dir }
+        Self {
+            router,
+            store,
+            node_id,
+            user_owner,
+            audit_path,
+            _dir: dir,
+        }
     }
 
     async fn send(&self, request: Request<Body>) -> (StatusCode, Value) {
         let response = self.router.clone().oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     async fn admin(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
         let body = body.map_or_else(Vec::new, |b| serde_json::to_vec(&b).unwrap());
-        self.send(signed(method, uri, body, ADMIN_KEY, ADMIN_SECRET)).await
+        self.send(signed(method, uri, body, ADMIN_KEY, ADMIN_SECRET))
+            .await
     }
 
     async fn add_peer(&self, state: NodeState) -> NodeId {
@@ -116,13 +131,24 @@ impl App {
         node_id
     }
 
-    async fn put_object(&self, owner_id: OwnerId, bucket: &str, key: &str, size: u64, on_node: NodeId) {
+    async fn put_object(
+        &self,
+        owner_id: OwnerId,
+        bucket: &str,
+        key: &str,
+        size: u64,
+        on_node: NodeId,
+    ) {
         let name = BucketName::parse(bucket).unwrap();
         let bucket = match self.store.get_bucket(&name).await.unwrap() {
             Some(bucket) => bucket,
             None => self
                 .store
-                .create_bucket(CreateBucket { name, owner_id, region: REGION.into() })
+                .create_bucket(CreateBucket {
+                    name,
+                    owner_id,
+                    region: REGION.into(),
+                })
                 .await
                 .unwrap(),
         };
@@ -171,10 +197,19 @@ impl App {
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
-fn signed(method: &str, uri: &str, body: Vec<u8>, access_key: &str, secret_key: &str) -> Request<Body> {
+fn signed(
+    method: &str,
+    uri: &str,
+    body: Vec<u8>,
+    access_key: &str,
+    secret_key: &str,
+) -> Request<Body> {
     let payload_hash = sha256_hex(&body);
     signed_with_hash(method, uri, body, &payload_hash, access_key, secret_key)
 }
@@ -196,7 +231,16 @@ fn signed_with_hash(
     ];
     let signed_headers: Vec<String> = headers.iter().map(|(k, _)| k.clone()).collect();
     let authorization = loony_auth::sign_header_auth(
-        method, path, query, &headers, &signed_headers, payload_hash, access_key, secret_key, REGION, &amz_date,
+        method,
+        path,
+        query,
+        &headers,
+        &signed_headers,
+        payload_hash,
+        access_key,
+        secret_key,
+        REGION,
+        &amz_date,
     );
     let mut builder = Request::builder().method(method).uri(uri);
     for (k, v) in &headers {
@@ -244,7 +288,14 @@ async fn a_tampered_body_is_rejected() {
         ADMIN_SECRET,
     );
     assert_eq!(app.send(request).await.0, StatusCode::BAD_REQUEST);
-    assert!(app.store.get_credential(USER_KEY).await.unwrap().unwrap().enabled);
+    assert!(
+        app.store
+            .get_credential(USER_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
 }
 
 #[tokio::test]
@@ -269,19 +320,39 @@ async fn cors_only_admits_local_origins() {
             .body(Body::empty())
             .unwrap()
     };
-    let allowed = app.router.clone().oneshot(preflight("http://localhost:5173")).await.unwrap();
+    let allowed = app
+        .router
+        .clone()
+        .oneshot(preflight("http://localhost:5173"))
+        .await
+        .unwrap();
     assert_eq!(
-        allowed.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+        allowed
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
         "http://localhost:5173"
     );
-    let refused = app.router.clone().oneshot(preflight("https://s3.lovegood.in")).await.unwrap();
-    assert!(refused.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+    let refused = app
+        .router
+        .clone()
+        .oneshot(preflight("https://s3.lovegood.in"))
+        .await
+        .unwrap();
+    assert!(
+        refused
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none()
+    );
 }
 
 #[tokio::test]
 async fn a_new_key_shows_its_secret_once_and_is_never_an_admin() {
     let app = App::new().await;
-    let (status, created) = app.admin("POST", "/admin/v1/credentials", Some(json!({}))).await;
+    let (status, created) = app
+        .admin("POST", "/admin/v1/credentials", Some(json!({})))
+        .await;
     assert_eq!(status, StatusCode::CREATED);
     let access_key = created["access_key"].as_str().unwrap();
     let secret_key = created["secret_key"].as_str().unwrap();
@@ -296,9 +367,18 @@ async fn a_new_key_shows_its_secret_once_and_is_never_an_admin() {
     let listed_text = listed.to_string();
     for secret in [secret_key, ADMIN_SECRET, USER_SECRET] {
         assert!(!listed_text.contains(secret), "listing leaked a secret");
-        assert!(!app.audit_contents().contains(secret), "audit log leaked a secret");
+        assert!(
+            !app.audit_contents().contains(secret),
+            "audit log leaked a secret"
+        );
     }
-    assert!(listed.as_array().unwrap().iter().all(|c| c.get("secret_key").is_none()));
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c.get("secret_key").is_none())
+    );
 }
 
 #[tokio::test]
@@ -318,30 +398,57 @@ async fn keys_can_join_an_existing_owner_but_not_an_unknown_one() {
 async fn you_cannot_lock_yourself_out() {
     let app = App::new().await;
     let uri = format!("/admin/v1/credentials/{ADMIN_KEY}");
-    let (status, _) = app.admin("PATCH", &uri, Some(json!({ "enabled": false }))).await;
+    let (status, _) = app
+        .admin("PATCH", &uri, Some(json!({ "enabled": false })))
+        .await;
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, _) = app.admin("DELETE", &uri, None).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(app.store.get_credential(ADMIN_KEY).await.unwrap().unwrap().enabled);
+    assert!(
+        app.store
+            .get_credential(ADMIN_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
 }
 
 #[tokio::test]
 async fn a_disabled_key_stops_working_and_can_be_reenabled() {
     let app = App::new().await;
     let uri = format!("/admin/v1/credentials/{USER_KEY}");
-    let (status, body) = app.admin("PATCH", &uri, Some(json!({ "enabled": false }))).await;
+    let (status, body) = app
+        .admin("PATCH", &uri, Some(json!({ "enabled": false })))
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["enabled"], false);
-    assert!(!app.store.get_credential(USER_KEY).await.unwrap().unwrap().enabled);
+    assert!(
+        !app.store
+            .get_credential(USER_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
 
-    app.admin("PATCH", &uri, Some(json!({ "enabled": true }))).await;
-    assert!(app.store.get_credential(USER_KEY).await.unwrap().unwrap().enabled);
+    app.admin("PATCH", &uri, Some(json!({ "enabled": true })))
+        .await;
+    assert!(
+        app.store
+            .get_credential(USER_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
 }
 
 #[tokio::test]
 async fn deleting_the_only_key_of_an_owner_with_buckets_is_refused() {
     let app = App::new().await;
-    app.put_object(app.user_owner, "user-bucket", "a.txt", 5, app.node_id).await;
+    app.put_object(app.user_owner, "user-bucket", "a.txt", 5, app.node_id)
+        .await;
     let uri = format!("/admin/v1/credentials/{USER_KEY}");
 
     let (status, body) = app.admin("DELETE", &uri, None).await;
@@ -351,7 +458,10 @@ async fn deleting_the_only_key_of_an_owner_with_buckets_is_refused() {
     // With a second key for that owner, the data stays reachable, so it's fine.
     let body = json!({ "owner_id": app.user_owner });
     app.admin("POST", "/admin/v1/credentials", Some(body)).await;
-    assert_eq!(app.admin("DELETE", &uri, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin("DELETE", &uri, None).await.0,
+        StatusCode::NO_CONTENT
+    );
     assert!(app.store.get_credential(USER_KEY).await.unwrap().is_none());
 }
 
@@ -384,23 +494,46 @@ async fn node_lifecycle_guards_data_at_every_step() {
         format!("/admin/v1/nodes/{peer}/remove"),
     );
     let state = async || {
-        app.store.list_nodes().await.unwrap().into_iter().find(|n| n.node_id == peer).unwrap().state
+        app.store
+            .list_nodes()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|n| n.node_id == peer)
+            .unwrap()
+            .state
     };
 
     // Must be drained first, and resume only applies to a draining node.
-    assert_eq!(app.admin("POST", &remove, None).await.0, StatusCode::CONFLICT);
-    assert_eq!(app.admin("POST", &resume, None).await.0, StatusCode::CONFLICT);
+    assert_eq!(
+        app.admin("POST", &remove, None).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.admin("POST", &resume, None).await.0,
+        StatusCode::CONFLICT
+    );
 
-    assert_eq!(app.admin("POST", &drain, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin("POST", &drain, None).await.0,
+        StatusCode::NO_CONTENT
+    );
     assert_eq!(state().await, NodeState::Draining);
 
     // Resume hands it back to the heartbeat loop by way of Joining.
-    assert_eq!(app.admin("POST", &resume, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin("POST", &resume, None).await.0,
+        StatusCode::NO_CONTENT
+    );
     assert_eq!(state().await, NodeState::Joining);
-    assert_eq!(app.admin("POST", &drain, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin("POST", &drain, None).await.0,
+        StatusCode::NO_CONTENT
+    );
 
     // It holds the only copy of something, so removing it would lose data.
-    app.put_object(app.user_owner, "bucket-on-peer", "a.txt", 5, peer).await;
+    app.put_object(app.user_owner, "bucket-on-peer", "a.txt", 5, peer)
+        .await;
     let (status, body) = app.admin("POST", &remove, None).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(body["message"].as_str().unwrap().contains("1 shard"));
@@ -420,25 +553,53 @@ async fn node_lifecycle_guards_data_at_every_step() {
         .tombstone_object(bucket.bucket_id, &ObjectKey::parse("a.txt").unwrap())
         .await
         .unwrap();
-    assert_eq!(app.admin("POST", &remove, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin("POST", &remove, None).await.0,
+        StatusCode::NO_CONTENT
+    );
     assert_eq!(state().await, NodeState::Removed);
 
     // Final: no way back, and repeating it is harmless.
-    assert_eq!(app.admin("POST", &drain, None).await.0, StatusCode::CONFLICT);
-    assert_eq!(app.admin("POST", &remove, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin("POST", &drain, None).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.admin("POST", &remove, None).await.0,
+        StatusCode::NO_CONTENT
+    );
 
     let unknown = format!("/admin/v1/nodes/{}/drain", NodeId::new());
-    assert_eq!(app.admin("POST", &unknown, None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.admin("POST", &unknown, None).await.0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
 async fn admins_see_every_owners_buckets_and_each_browse_is_recorded() {
     let app = App::new().await;
     let other_owner = OwnerId::new();
-    app.put_object(app.user_owner, "alpha-bucket", "docs/a.txt", 100, app.node_id).await;
-    app.put_object(app.user_owner, "alpha-bucket", "docs/b.txt", 50, app.node_id).await;
-    app.put_object(app.user_owner, "alpha-bucket", "root.txt", 1, app.node_id).await;
-    app.put_object(other_owner, "beta-bucket", "c.txt", 7, app.node_id).await;
+    app.put_object(
+        app.user_owner,
+        "alpha-bucket",
+        "docs/a.txt",
+        100,
+        app.node_id,
+    )
+    .await;
+    app.put_object(
+        app.user_owner,
+        "alpha-bucket",
+        "docs/b.txt",
+        50,
+        app.node_id,
+    )
+    .await;
+    app.put_object(app.user_owner, "alpha-bucket", "root.txt", 1, app.node_id)
+        .await;
+    app.put_object(other_owner, "beta-bucket", "c.txt", 7, app.node_id)
+        .await;
 
     let (_, buckets) = app.admin("GET", "/admin/v1/buckets", None).await;
     assert_eq!(buckets[0]["name"], "alpha-bucket");
@@ -453,14 +614,24 @@ async fn admins_see_every_owners_buckets_and_each_browse_is_recorded() {
     assert_eq!(overview["totals"]["owners"], 3);
     assert_eq!(overview["mode"], "standalone");
 
-    let (_, top) = app.admin("GET", "/admin/v1/buckets/alpha-bucket/objects", None).await;
+    let (_, top) = app
+        .admin("GET", "/admin/v1/buckets/alpha-bucket/objects", None)
+        .await;
     assert_eq!(top["folders"], json!(["docs/"]));
     assert_eq!(top["objects"][0]["key"], "root.txt");
 
-    let (_, docs) = app.admin("GET", "/admin/v1/buckets/alpha-bucket/objects?prefix=docs%2F", None).await;
+    let (_, docs) = app
+        .admin(
+            "GET",
+            "/admin/v1/buckets/alpha-bucket/objects?prefix=docs%2F",
+            None,
+        )
+        .await;
     assert_eq!(docs["objects"].as_array().unwrap().len(), 2);
 
-    let (status, _) = app.admin("GET", "/admin/v1/buckets/no-such-bucket/objects", None).await;
+    let (status, _) = app
+        .admin("GET", "/admin/v1/buckets/no-such-bucket/objects", None)
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     let (_, audit) = app.admin("GET", "/admin/v1/audit?limit=3", None).await;
@@ -485,19 +656,22 @@ async fn an_old_owner_can_become_a_project_but_the_root_owner_cannot() {
         .await
         .unwrap();
 
-    let (status, created) = app.admin("POST", "/admin/v1/credentials", Some(json!({}))).await;
+    let (status, created) = app
+        .admin("POST", "/admin/v1/credentials", Some(json!({})))
+        .await;
     assert_eq!(status, StatusCode::CREATED);
     let owner = created["owner_id"].as_str().unwrap().to_string();
 
-    let adopt = |owner: &str, name: &str| {
-        json!({"owner_id": owner, "name": name, "user_id": user.user_id})
-    };
+    let adopt =
+        |owner: &str, name: &str| json!({"owner_id": owner, "name": name, "user_id": user.user_id});
     let path = "/admin/v1/projects/adopt-owner";
 
     let (status, _) = app.admin("POST", path, Some(adopt(&owner, "  "))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (status, project) = app.admin("POST", path, Some(adopt(&owner, "Imported"))).await;
+    let (status, project) = app
+        .admin("POST", path, Some(adopt(&owner, "Imported")))
+        .await;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(project["name"], "Imported");
 
@@ -506,16 +680,31 @@ async fn an_old_owner_can_become_a_project_but_the_root_owner_cannot() {
 
     // Its keys are managed in the project from now on.
     let (status, _) = app
-        .admin("POST", "/admin/v1/credentials", Some(json!({"owner_id": owner})))
+        .admin(
+            "POST",
+            "/admin/v1/credentials",
+            Some(json!({"owner_id": owner})),
+        )
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
 
     let keys = app.store.list_credentials().await.unwrap();
-    let root = keys.iter().find(|key| key.admin).unwrap().owner_id.to_string();
+    let root = keys
+        .iter()
+        .find(|key| key.admin)
+        .unwrap()
+        .owner_id
+        .to_string();
     let (status, _) = app.admin("POST", path, Some(adopt(&root, "Root"))).await;
     assert_eq!(status, StatusCode::CONFLICT);
 
-    let (status, _) = app.admin("POST", path, Some(adopt(&OwnerId::new().to_string(), "None"))).await;
+    let (status, _) = app
+        .admin(
+            "POST",
+            path,
+            Some(adopt(&OwnerId::new().to_string(), "None")),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     assert!(app.audit_contents().contains("project.adopt_owner"));
@@ -540,9 +729,18 @@ async fn sign_in_session_keys_are_left_out_of_the_key_list_but_project_keys_are_
         created_at: OffsetDateTime::now_utc(),
     };
     use loony_metadata::CredentialKind::{ProjectAccessKey, ProjectSession, UserSession};
-    app.store.put_credential(key("USERSESSION", UserSession)).await.unwrap();
-    app.store.put_credential(key("PROJSESSION", ProjectSession)).await.unwrap();
-    app.store.put_credential(key("PROJKEY", ProjectAccessKey)).await.unwrap();
+    app.store
+        .put_credential(key("USERSESSION", UserSession))
+        .await
+        .unwrap();
+    app.store
+        .put_credential(key("PROJSESSION", ProjectSession))
+        .await
+        .unwrap();
+    app.store
+        .put_credential(key("PROJKEY", ProjectAccessKey))
+        .await
+        .unwrap();
 
     let (status, list) = app.admin("GET", "/admin/v1/credentials", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -553,7 +751,7 @@ async fn sign_in_session_keys_are_left_out_of_the_key_list_but_project_keys_are_
 }
 
 #[tokio::test]
-async fn users_can_be_listed_approved_and_disabled() {
+async fn users_can_be_listed_and_disabled() {
     let app = App::new().await;
     let user = app
         .store
@@ -570,22 +768,23 @@ async fn users_can_be_listed_approved_and_disabled() {
     let (status, list) = app.admin("GET", "/admin/v1/users", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list[0]["email"], "alice@example.com");
-    assert_eq!(list[0]["can_create_projects"], false);
     assert_eq!(list[0]["enabled"], true);
+    assert!(
+        list[0].get("can_create_projects").is_none(),
+        "anyone can create projects now"
+    );
 
     let path = format!("/admin/v1/users/{}", user.user_id);
-    let (status, updated) = app.admin("PATCH", &path, Some(json!({"can_create_projects": true}))).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(updated["can_create_projects"], true);
-    assert_eq!(updated["enabled"], true, "what wasn't mentioned stays the same");
-
-    let (status, updated) = app.admin("PATCH", &path, Some(json!({"enabled": false}))).await;
+    let (status, updated) = app
+        .admin("PATCH", &path, Some(json!({"enabled": false})))
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["enabled"], false);
-    assert_eq!(updated["can_create_projects"], true);
 
     let unknown = format!("/admin/v1/users/{}", loony_core::UserId::new());
-    let (status, _) = app.admin("PATCH", &unknown, Some(json!({"enabled": true}))).await;
+    let (status, _) = app
+        .admin("PATCH", &unknown, Some(json!({"enabled": true})))
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     assert!(app.audit_contents().contains("user.update"));
@@ -614,9 +813,42 @@ async fn projects_are_listed_with_their_members_and_usage_and_can_be_disabled() 
         })
         .await
         .unwrap();
+    // A project only stores anything once it's paid for.
+    app.store
+        .create_gift_code(loony_metadata::NewGiftCode {
+            code_hash: "PAY".into(),
+            hint: "PAY".into(),
+            amount_paise: 100_000,
+            expires_at: None,
+            max_uses: 1,
+            note: None,
+            created_by: "test".into(),
+        })
+        .await
+        .unwrap();
+    app.store
+        .redeem_gift_code("PAY".into(), alice.user_id)
+        .await
+        .unwrap();
+    app.store
+        .pay_for_project(
+            project.project_id,
+            alice.user_id,
+            loony_metadata::Plan {
+                id: "standard".into(),
+                name: "Standard".into(),
+                price_paise: 100_000,
+                storage_bytes: 15 << 30,
+                period: loony_metadata::BillingPeriod::Months(1),
+            },
+        )
+        .await
+        .unwrap();
     let node = app.add_peer(NodeState::Healthy).await;
-    app.put_object(project.owner_id, "website-assets", "logo.png", 1000, node).await;
-    app.put_object(project.owner_id, "website-assets", "hero.png", 500, node).await;
+    app.put_object(project.owner_id, "website-assets", "logo.png", 1000, node)
+        .await;
+    app.put_object(project.owner_id, "website-assets", "hero.png", 500, node)
+        .await;
     let key = |access_key: &str, kind| Credential {
         access_key: access_key.into(),
         secret_key: "secret".into(),
@@ -633,8 +865,14 @@ async fn projects_are_listed_with_their_members_and_usage_and_can_be_disabled() 
         created_at: OffsetDateTime::now_utc(),
     };
     use loony_metadata::CredentialKind::{ProjectAccessKey, ProjectSession};
-    app.store.put_project_credential(key("APPKEY", ProjectAccessKey), 10).await.unwrap();
-    app.store.put_project_credential(key("SESSIONKEY", ProjectSession), 10).await.unwrap();
+    app.store
+        .put_project_credential(key("APPKEY", ProjectAccessKey), 10)
+        .await
+        .unwrap();
+    app.store
+        .put_project_credential(key("SESSIONKEY", ProjectSession), 10)
+        .await
+        .unwrap();
 
     let (status, list) = app.admin("GET", "/admin/v1/projects", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -646,25 +884,45 @@ async fn projects_are_listed_with_their_members_and_usage_and_can_be_disabled() 
     assert_eq!(list[0]["buckets"], 1);
     assert_eq!(list[0]["objects"], 2);
     assert_eq!(list[0]["bytes"], 1500);
+    assert_eq!(list[0]["subscription"], "active");
+    assert_eq!(list[0]["plan_name"], "Standard");
+    assert_eq!(list[0]["limit_bytes"], 15u64 << 30);
 
     let (_, keys) = app.admin("GET", "/admin/v1/credentials", None).await;
-    let listed = keys.as_array().unwrap().iter().find(|k| k["access_key"] == "APPKEY").unwrap();
+    let listed = keys
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["access_key"] == "APPKEY")
+        .unwrap();
     assert_eq!(listed["name"], "App");
     assert_eq!(listed["project_id"], project.project_id.to_string());
 
     let path = format!("/admin/v1/projects/{}", project.project_id);
-    let (status, updated) = app.admin("PATCH", &path, Some(json!({"enabled": false}))).await;
+    let (status, updated) = app
+        .admin("PATCH", &path, Some(json!({"enabled": false})))
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["enabled"], false);
-    assert!(app.store.get_credential("SESSIONKEY").await.unwrap().is_none());
+    assert!(
+        app.store
+            .get_credential("SESSIONKEY")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(app.store.get_credential("APPKEY").await.unwrap().is_some());
 
-    let (status, updated) = app.admin("PATCH", &path, Some(json!({"enabled": true}))).await;
+    let (status, updated) = app
+        .admin("PATCH", &path, Some(json!({"enabled": true})))
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["enabled"], true);
 
     let unknown = format!("/admin/v1/projects/{}", loony_core::ProjectId::new());
-    let (status, _) = app.admin("PATCH", &unknown, Some(json!({"enabled": true}))).await;
+    let (status, _) = app
+        .admin("PATCH", &unknown, Some(json!({"enabled": true})))
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     let audit = app.audit_contents();
@@ -695,7 +953,9 @@ async fn only_owners_outside_projects_can_be_adopted() {
         .await
         .unwrap();
 
-    let (_, created) = app.admin("POST", "/admin/v1/credentials", Some(json!({}))).await;
+    let (_, created) = app
+        .admin("POST", "/admin/v1/credentials", Some(json!({})))
+        .await;
     let old_owner = created["owner_id"].as_str().unwrap().to_string();
 
     // A sign-in's session key has its own owner, which is nothing to adopt.
@@ -719,16 +979,39 @@ async fn only_owners_outside_projects_can_be_adopted() {
         .await
         .unwrap();
 
-    let (status, owners) = app.admin("GET", "/admin/v1/projects/adoptable-owners", None).await;
+    let (status, owners) = app
+        .admin("GET", "/admin/v1/projects/adoptable-owners", None)
+        .await;
     assert_eq!(status, StatusCode::OK);
-    let ids: Vec<&str> = owners.as_array().unwrap().iter().map(|o| o["owner_id"].as_str().unwrap()).collect();
+    let ids: Vec<&str> = owners
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["owner_id"].as_str().unwrap())
+        .collect();
     assert!(ids.contains(&old_owner.as_str()));
-    assert!(!ids.contains(&project.owner_id.to_string().as_str()), "already a project");
-    assert!(!ids.contains(&session_owner.to_string().as_str()), "only a sign-in");
+    assert!(
+        !ids.contains(&project.owner_id.to_string().as_str()),
+        "already a project"
+    );
+    assert!(
+        !ids.contains(&session_owner.to_string().as_str()),
+        "only a sign-in"
+    );
     let credentials = app.store.list_credentials().await.unwrap();
-    let admin_owner = credentials.iter().find(|c| c.admin).unwrap().owner_id.to_string();
+    let admin_owner = credentials
+        .iter()
+        .find(|c| c.admin)
+        .unwrap()
+        .owner_id
+        .to_string();
     assert!(!ids.contains(&admin_owner.as_str()), "holds an admin key");
-    let listed = owners.as_array().unwrap().iter().find(|o| o["owner_id"] == old_owner.as_str()).unwrap();
+    let listed = owners
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["owner_id"] == old_owner.as_str())
+        .unwrap();
     assert_eq!(listed["access_keys"], 1);
 
     let (status, _) = app
@@ -739,6 +1022,109 @@ async fn only_owners_outside_projects_can_be_adopted() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
-    let (_, owners) = app.admin("GET", "/admin/v1/projects/adoptable-owners", None).await;
-    assert!(!owners.to_string().contains(&old_owner), "it's a project now");
+    let (_, owners) = app
+        .admin("GET", "/admin/v1/projects/adoptable-owners", None)
+        .await;
+    assert!(
+        !owners.to_string().contains(&old_owner),
+        "it's a project now"
+    );
+}
+
+#[tokio::test]
+async fn gift_codes_are_shown_once_listed_with_redemptions_and_can_be_disabled() {
+    let app = App::new().await;
+    let alice = app
+        .store
+        .record_user_sign_in(loony_metadata::UserSignIn {
+            issuer: "https://issuer.example".into(),
+            subject: "alice".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: true,
+            name: None,
+        })
+        .await
+        .unwrap();
+
+    for bad in [
+        json!({"amount_paise": 0}),
+        json!({"amount_paise": 100_000_001u64}),
+        json!({"amount_paise": 100, "max_uses": 0}),
+        json!({"amount_paise": 100, "expires_at": "2020-01-01T00:00:00Z"}),
+    ] {
+        let (status, _) = app
+            .admin("POST", "/admin/v1/gift-codes", Some(bad.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    let (status, created) = app
+        .admin(
+            "POST",
+            "/admin/v1/gift-codes",
+            Some(json!({"amount_paise": 2_000_000, "max_uses": 3, "note": "Launch"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let code = created["code"].as_str().unwrap().to_string();
+    assert_eq!(code.len(), 17);
+    assert!(
+        code.bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    );
+    assert_eq!(created["hint"], &code[13..]);
+    assert_eq!(created["max_uses"], 3);
+    assert_eq!(created["note"], "Launch");
+
+    // Codes differ every time.
+    let (_, other) = app
+        .admin(
+            "POST",
+            "/admin/v1/gift-codes",
+            Some(json!({"amount_paise": 100})),
+        )
+        .await;
+    assert_ne!(other["code"], created["code"]);
+    assert_eq!(other["max_uses"], 1, "one use unless asked");
+
+    app.store
+        .redeem_gift_code(
+            loony_metadata::billing::gift_code_hash(&code),
+            alice.user_id,
+        )
+        .await
+        .unwrap();
+    let (status, list) = app.admin("GET", "/admin/v1/gift-codes", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !list.to_string().contains(&code),
+        "the code itself is never listed"
+    );
+    let listed = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == created["id"])
+        .unwrap();
+    assert_eq!(listed["uses"], 1);
+    assert_eq!(listed["redemptions"][0]["email"], "alice@example.com");
+
+    let path = format!("/admin/v1/gift-codes/{}", created["id"].as_str().unwrap());
+    let (status, disabled) = app
+        .admin("PATCH", &path, Some(json!({"disabled": true})))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(disabled["disabled"], true);
+    let unknown = format!("/admin/v1/gift-codes/{}", loony_core::GiftCodeId::new());
+    let (status, _) = app
+        .admin("PATCH", &unknown, Some(json!({"disabled": true})))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let audit = app.audit_contents();
+    assert!(audit.contains("gift_code.create") && audit.contains("gift_code.disable"));
+    assert!(
+        !audit.contains(&code),
+        "the code never reaches the audit log"
+    );
 }

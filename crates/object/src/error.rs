@@ -40,8 +40,13 @@ pub enum Ls3Error {
     #[error("a precondition on the request did not hold")]
     PreconditionFailed,
 
+    #[error("{0}")]
+    QuotaExceeded(String),
+    #[error("{0}")]
+    ProjectReadOnly(String),
+
     #[error("metadata store error: {0}")]
-    Meta(#[from] MetaError),
+    Meta(MetaError),
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
 }
@@ -51,5 +56,60 @@ impl Ls3Error {
     /// to the client, per prompt §57) as opposed to a well-defined LS3-level condition.
     pub fn is_internal(&self) -> bool {
         matches!(self, Ls3Error::Meta(_) | Ls3Error::Storage(_))
+    }
+}
+
+fn bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// A project's subscription and storage limit become errors an S3 client can read, rather
+/// than an internal error.
+impl From<MetaError> for Ls3Error {
+    fn from(err: MetaError) -> Self {
+        use loony_metadata::SubscriptionState as State;
+        match err {
+            MetaError::QuotaExceeded {
+                limit,
+                used,
+                requested,
+            } => Ls3Error::QuotaExceeded(format!(
+                "This would take the project over its plan's storage: {} of {} used, {} more \
+                 needed. Delete files to make room.",
+                bytes(used),
+                bytes(limit),
+                bytes(requested)
+            )),
+            MetaError::ProjectNotWritable(state) => Ls3Error::ProjectReadOnly(
+                match state {
+                    State::Unpaid => {
+                        "This project has no subscription yet. Subscribe to it in \
+                                      the console to store data."
+                    }
+                    State::Suspended => {
+                        "This project is suspended because its subscription \
+                                         lapsed. Renew it in the console."
+                    }
+                    _ => {
+                        "This project is read-only because its subscription lapsed or was \
+                          cancelled. Renew it in the console to make changes."
+                    }
+                }
+                .to_string(),
+            ),
+            MetaError::ProjectDisabled(_) => Ls3Error::AccessDenied,
+            other => Ls3Error::Meta(other),
+        }
     }
 }

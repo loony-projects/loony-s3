@@ -191,6 +191,7 @@ fn config(issuer: &str) -> ConsoleConfig {
         redirect_uris: vec![REDIRECT_URI.to_string()],
         session_ttl: Duration::from_secs(8 * 60 * 60),
         client_ip_header: None,
+        billing: Default::default(),
     }
 }
 
@@ -346,7 +347,6 @@ async fn a_good_sign_in_returns_a_working_session_key() {
     assert_eq!(session["user"]["email"], "person@example.com");
     assert_eq!(session["user"]["email_verified"], true);
     assert_eq!(session["user"]["name"], "A Person");
-    assert_eq!(session["user"]["can_create_projects"], false);
 
     let stored = h
         .metadata
@@ -598,13 +598,7 @@ async fn a_disabled_user_is_refused_and_their_session_stops_at_once() {
     let user = h.metadata.list_users().await.unwrap().remove(0);
 
     h.metadata
-        .set_user_access(
-            user.user_id,
-            UserAccess {
-                enabled: false,
-                can_create_projects: false,
-            },
-        )
+        .set_user_access(user.user_id, UserAccess { enabled: false })
         .await
         .unwrap();
 

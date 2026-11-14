@@ -101,6 +101,88 @@ impl From<MetaError> for ConsoleError {
                     "That email address already has a pending invite to this project.",
                 );
             }
+            MetaError::ProjectNotWritable(state) => {
+                use loony_metadata::SubscriptionState as S;
+                let (code, message) = match state {
+                    S::Unpaid => (
+                        "subscription_required",
+                        "Subscribe to this project before storing anything in it.",
+                    ),
+                    S::Suspended => (
+                        "project_suspended",
+                        "This project is suspended because its subscription lapsed. Renew it to use it again.",
+                    ),
+                    _ => (
+                        "project_read_only",
+                        "This project is read-only because its subscription lapsed or was cancelled. Renew it to make changes.",
+                    ),
+                };
+                return Self::new(StatusCode::FORBIDDEN, code, message);
+            }
+            MetaError::QuotaExceeded { .. } => {
+                return Self::new(
+                    StatusCode::FORBIDDEN,
+                    "quota_exceeded",
+                    "This project has used all the storage its plan allows.",
+                );
+            }
+            MetaError::InsufficientCredit { balance, needed } => {
+                return Self::new(
+                    StatusCode::PAYMENT_REQUIRED,
+                    "insufficient_credit",
+                    format!(
+                        "Not enough credit: this needs {}, and you have {}.",
+                        crate::billing::rupees(*needed),
+                        crate::billing::rupees(*balance)
+                    ),
+                );
+            }
+            MetaError::AlreadyPaid => {
+                return conflict("already_paid", "This project is already paid for.");
+            }
+            MetaError::NoSubscription => {
+                return conflict(
+                    "no_subscription",
+                    "This project has no subscription to change.",
+                );
+            }
+            MetaError::NotProjectOwner => {
+                return Self::new(
+                    StatusCode::FORBIDDEN,
+                    "owner_only",
+                    "Only a project Owner can do that.",
+                );
+            }
+            MetaError::NoSuchGiftCode => {
+                return Self::new(
+                    StatusCode::NOT_FOUND,
+                    "gift_code_invalid",
+                    "That gift code isn't valid.",
+                );
+            }
+            MetaError::GiftCodeExpired => {
+                return Self::new(
+                    StatusCode::GONE,
+                    "gift_code_expired",
+                    "That gift code has expired.",
+                );
+            }
+            MetaError::GiftCodeUsedUp => {
+                return conflict("gift_code_used_up", "That gift code has already been used.");
+            }
+            MetaError::GiftCodeAlreadyRedeemed => {
+                return conflict(
+                    "gift_code_already_redeemed",
+                    "You've already redeemed that gift code.",
+                );
+            }
+            MetaError::NoSuchCheckout => {
+                return Self::new(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "That doesn't exist, or you don't have access to it.",
+                );
+            }
             MetaError::AlreadyMember => {
                 return conflict(
                     "already_member",

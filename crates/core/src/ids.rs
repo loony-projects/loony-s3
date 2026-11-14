@@ -117,6 +117,12 @@ define_uuid_id!(
     "A project: buckets, access keys and members grouped together."
 );
 define_uuid_id!(InviteId, "An invitation to join a project.");
+define_uuid_id!(GiftCodeId, "A gift code that adds credit when redeemed.");
+define_uuid_id!(LedgerEntryId, "One change to a user's credit balance.");
+define_uuid_id!(
+    CheckoutId,
+    "One attempt to pay for credit through a payment provider."
+);
 define_uuid_id!(
     UserId,
     "A person who signs in through the identity provider. Separate from [`OwnerId`], \

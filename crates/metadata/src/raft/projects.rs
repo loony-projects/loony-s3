@@ -7,6 +7,7 @@ use redb::{Database, ReadableTable, Table};
 use serde::de::DeserializeOwned;
 use time::OffsetDateTime;
 
+use crate::billing::SubscriptionState;
 use crate::commands::{
     Credential, CredentialKind, Project, ProjectInvite, ProjectMember, ProjectRole, User,
 };
@@ -14,18 +15,19 @@ use crate::error::MetaError;
 use crate::raft::applier::{
     BUCKETS, CREDENTIALS, PROJECT_INVITES, PROJECT_MEMBERS, PROJECTS, USERS, db_err,
 };
+use crate::raft::billing_apply;
 use crate::raft::types::{
     ResolvedAdoptOwner, ResolvedCreateInvite, ResolvedCreateProject, ResolvedInviteAnswer,
     ResolvedTouchCredential,
 };
 
-type Rows<'txn> = Table<'txn, &'static str, &'static [u8]>;
+pub(crate) type Rows<'txn> = Table<'txn, &'static str, &'static [u8]>;
 
 fn member_key(project_id: ProjectId, user_id: UserId) -> String {
     format!("{project_id}\0{user_id}")
 }
 
-fn read_row<T: DeserializeOwned>(
+pub(crate) fn read_row<T: DeserializeOwned>(
     table: &impl ReadableTable<&'static str, &'static [u8]>,
     key: &str,
 ) -> Result<Option<T>, MetaError> {
@@ -35,7 +37,7 @@ fn read_row<T: DeserializeOwned>(
     }
 }
 
-fn read_rows<T: DeserializeOwned>(
+pub(crate) fn read_rows<T: DeserializeOwned>(
     table: &impl ReadableTable<&'static str, &'static [u8]>,
 ) -> Result<Vec<T>, MetaError> {
     let mut rows = Vec::new();
@@ -46,7 +48,7 @@ fn read_rows<T: DeserializeOwned>(
     Ok(rows)
 }
 
-fn write_row<T: serde::Serialize>(
+pub(crate) fn write_row<T: serde::Serialize>(
     table: &mut Rows<'_>,
     key: &str,
     row: &T,
@@ -57,7 +59,7 @@ fn write_row<T: serde::Serialize>(
 }
 
 /// Deletes the rows of type `T` matching `remove`.
-fn remove_rows<T: DeserializeOwned>(
+pub(crate) fn remove_rows<T: DeserializeOwned>(
     table: &mut Rows<'_>,
     remove: impl Fn(&T) -> bool,
 ) -> Result<(), MetaError> {
@@ -81,7 +83,7 @@ pub(crate) fn remove_credentials(
     remove_rows(credentials, remove)
 }
 
-fn load_project(table: &Rows<'_>, project_id: ProjectId) -> Result<Project, MetaError> {
+pub(crate) fn load_project(table: &Rows<'_>, project_id: ProjectId) -> Result<Project, MetaError> {
     read_row(table, &project_id.to_string())?
         .ok_or_else(|| MetaError::NoSuchProject(project_id.to_string()))
 }
@@ -123,6 +125,8 @@ pub(crate) fn create_project(
             created_at: at,
         };
         write_row(&mut projects, &project_id.to_string(), &project)?;
+        drop(projects);
+        billing_apply::index_project(&write_txn, owner_id, Some(project_id))?;
 
         let mut members = write_txn.open_table(PROJECT_MEMBERS).map_err(db_err)?;
         write_row(
@@ -190,6 +194,8 @@ pub(crate) fn adopt_owner(
             created_at: at,
         };
         write_row(&mut projects, &project_id.to_string(), &project)?;
+        drop(projects);
+        billing_apply::index_project(&write_txn, cmd.owner_id, Some(project_id))?;
 
         for mut key in keys {
             key.project_id = Some(project_id);
@@ -292,6 +298,9 @@ pub(crate) fn delete_project(db: &Database, project_id: ProjectId) -> Result<(),
         projects
             .remove(project_id.to_string().as_str())
             .map_err(db_err)?;
+        drop((projects, credentials, members, invites));
+        billing_apply::index_project(&write_txn, project.owner_id, None)?;
+        billing_apply::forget_subscription(&write_txn, project_id)?;
     }
     write_txn.commit().map_err(db_err)?;
     Ok(())
@@ -577,6 +586,19 @@ pub(crate) fn put_project_credential(
             ));
         }
 
+        drop(projects);
+        // A suspended project gives out no keys at all. One that can't take on data can still
+        // be opened, to see what's there and to pay, but gets no new access keys.
+        let state = billing_apply::project_subscription_state(&write_txn, project_id)?;
+        match credential.kind {
+            CredentialKind::ProjectSession if state == SubscriptionState::Suspended => {
+                return Err(MetaError::ProjectNotWritable(state));
+            }
+            CredentialKind::ProjectAccessKey if !state.writable() => {
+                return Err(MetaError::ProjectNotWritable(state));
+            }
+            _ => {}
+        }
         let mut credentials = write_txn.open_table(CREDENTIALS).map_err(db_err)?;
         match credential.kind {
             CredentialKind::ProjectSession => {

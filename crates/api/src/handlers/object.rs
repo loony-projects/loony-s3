@@ -80,6 +80,23 @@ fn user_metadata(headers: &HeaderMap) -> BTreeMap<String, String> {
     map
 }
 
+/// How many bytes an upload says it carries: the decoded size for an `aws-chunked` body,
+/// since its `Content-Length` includes the framing.
+fn declared_size(headers: &HeaderMap) -> Option<u64> {
+    let read = |name: &str| headers.get(name)?.to_str().ok()?.trim().parse::<u64>().ok();
+    read("x-amz-decoded-content-length").or_else(|| {
+        let chunked = headers
+            .get(header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("aws-chunked"));
+        if chunked {
+            None
+        } else {
+            read(header::CONTENT_LENGTH.as_str())
+        }
+    })
+}
+
 /// Parses a `Range` header. Anything but a single well-formed byte range gives `None`,
 /// which means serving the whole object: HTTP lets a server ignore a Range it can't honor,
 /// and the upstream protocol does the same for multiple ranges.
@@ -181,6 +198,12 @@ pub async fn put_object(
     let rid = request_id(&headers);
     let (bucket_name, object_key) = parse_bucket_and_key(&bucket, &key, &rid)?;
     let resource = format!("/{bucket}/{key}");
+
+    state
+        .objects
+        .check_upload(&bucket_name, owner.0, declared_size(&headers))
+        .await
+        .map_err(|e| ApiError::new(e, rid.clone(), Some(resource.clone())))?;
 
     let (boxed, failure) = payload::decode_body(&headers, chunk_signer.map(|s| s.0), body)
         .map_err(|e| ApiError::new(e.into(), rid.clone(), Some(resource.clone())))?;

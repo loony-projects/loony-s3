@@ -10,8 +10,9 @@
 use std::io::Cursor;
 
 use loony_core::{
-    Bucket, BucketId, BucketName, ClusterId, NodeId, NodeInfo, NodeState, ObjectId, ObjectKey,
-    ObjectManifest, PartManifest, UploadId, VersionId, UserId, InviteId, OwnerId, ProjectId,
+    Bucket, BucketId, BucketName, CheckoutId, ClusterId, GiftCodeId, InviteId, LedgerEntryId,
+    NodeId, NodeInfo, NodeState, ObjectId, ObjectKey, ObjectManifest, OwnerId, PartManifest,
+    ProjectId, UploadId, UserId, VersionId,
 };
 use time::OffsetDateTime;
 
@@ -51,6 +52,73 @@ pub struct ResolvedUserSignIn {
     pub user_id: UserId,
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedPay {
+    pub project_id: ProjectId,
+    pub payer: UserId,
+    pub plan: crate::billing::Plan,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub entry_id: LedgerEntryId,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedCancel {
+    pub project_id: ProjectId,
+    pub user_id: UserId,
+    pub cancel: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+/// The state the background task saw, so applying the step twice is a no-op.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedAdvance {
+    pub project_id: ProjectId,
+    pub expected_state: crate::billing::SubscriptionState,
+    #[serde(with = "time::serde::rfc3339")]
+    pub expected_period_end: OffsetDateTime,
+    pub timings: crate::billing::BillingTimings,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub entry_id: LedgerEntryId,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedNewGiftCode {
+    pub code: crate::billing::NewGiftCode,
+    pub code_id: GiftCodeId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedRedeem {
+    pub code_hash: String,
+    pub user_id: UserId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub entry_id: LedgerEntryId,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedNewCheckout {
+    pub checkout: crate::billing::NewCheckout,
+    pub checkout_id: CheckoutId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedCompleteCheckout {
+    pub checkout_id: CheckoutId,
+    pub succeeded: bool,
+    pub provider_ref: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub entry_id: LedgerEntryId,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -144,6 +212,16 @@ pub enum MetadataCommand {
     SetCredentialEnabled(String, bool),
     TouchCredential(Box<ResolvedTouchCredential>),
     DeleteSession(String),
+    PayForProject(Box<ResolvedPay>),
+    SetCancel(Box<ResolvedCancel>),
+    AdvanceSubscription(Box<ResolvedAdvance>),
+    CreateGiftCode(Box<ResolvedNewGiftCode>),
+    SetGiftCodeDisabled(GiftCodeId, bool),
+    RedeemGiftCode(Box<ResolvedRedeem>),
+    CreateCheckout(Box<ResolvedNewCheckout>),
+    CompleteCheckout(Box<ResolvedCompleteCheckout>),
+    /// Builds usage counters and indexes from the data, once, for data stored before them.
+    RebuildDerivedIndexes,
     BootstrapCluster(ClusterId),
     RegisterNode(RegisterNode),
     UpdateNodeState(NodeId, NodeState),
@@ -163,6 +241,12 @@ pub enum CommandResponse {
     Project(Box<Project>),
     Member(Box<ProjectMember>),
     Invite(Box<ProjectInvite>),
+    Paid(Box<(crate::billing::Subscription, crate::billing::LedgerEntry)>),
+    Subscription(Box<crate::billing::Subscription>),
+    Advanced(Box<Option<(crate::billing::Subscription, crate::billing::Step)>>),
+    GiftCode(Box<crate::billing::GiftCode>),
+    Redeemed(Box<(crate::billing::GiftCode, crate::billing::LedgerEntry)>),
+    Checkout(Box<crate::billing::Checkout>),
     Unit,
 }
 

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::future::try_join_all;
-use md5::{Digest as _, Md5};
 use loony_core::{
     Bucket, BucketName, DurabilityPolicy, ETag, NodeId, NodeState, ObjectId, ObjectKey,
     ObjectManifest, OwnerId, PartManifest, ShardLocation, ShardTarget, Stripe, UploadId, VersionId,
@@ -16,6 +15,7 @@ use loony_metadata::{
     PartSummary,
 };
 use loony_storage::{ShardBytesIn, ShardBytesOut, ShardStore, StorageError};
+use md5::{Digest as _, Md5};
 use sha2::Sha256;
 use time::OffsetDateTime;
 
@@ -84,6 +84,22 @@ impl ObjectService {
             node_id,
             volumes,
         }
+    }
+
+    /// Refuses an upload that can't be stored, before any of it is: a project that can't
+    /// take on data, or one without room for `size_hint` more bytes. Storing it checks again,
+    /// so this only saves sending data that would be refused anyway.
+    pub async fn check_upload(
+        &self,
+        bucket: &BucketName,
+        requesting_owner: OwnerId,
+        size_hint: Option<u64>,
+    ) -> Result<(), Ls3Error> {
+        let bucket = self.authorized_bucket(bucket, requesting_owner).await?;
+        self.metadata
+            .check_write(bucket.owner_id, size_hint.unwrap_or(0))
+            .await?;
+        Ok(())
     }
 
     async fn authorized_bucket(
@@ -666,7 +682,11 @@ impl ByteRange {
 /// The stripes holding bytes `start..=end`, each with how many bytes to skip and take.
 /// Positions are added up from the stripes' lengths, so they hold across multipart
 /// objects, where each part's stripes restart their own offsets.
-fn stripes_in_range(manifest: &ObjectManifest, start: u64, end: u64) -> Vec<(Stripe, usize, usize)> {
+fn stripes_in_range(
+    manifest: &ObjectManifest,
+    start: u64,
+    end: u64,
+) -> Vec<(Stripe, usize, usize)> {
     let mut selected = Vec::new();
     let mut position = 0u64;
     for stripe in manifest.parts.iter().flat_map(|part| &part.stripes) {

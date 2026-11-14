@@ -23,7 +23,6 @@ pub struct UserView {
     email: Option<String>,
     email_verified: bool,
     name: Option<String>,
-    can_create_projects: bool,
 }
 
 impl From<User> for UserView {
@@ -33,7 +32,6 @@ impl From<User> for UserView {
             email: user.email,
             email_verified: user.email_verified,
             name: user.name,
-            can_create_projects: user.can_create_projects,
         }
     }
 }
@@ -62,7 +60,7 @@ pub(crate) fn random_hex(ids: usize) -> String {
         .collect()
 }
 
-fn client_key(
+pub(crate) fn client_key(
     state: &ConsoleState,
     headers: &HeaderMap,
     peer: Option<ConnectInfo<SocketAddr>>,

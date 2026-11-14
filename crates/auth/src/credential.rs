@@ -46,10 +46,21 @@ impl<T: MetadataStore + ?Sized> CredentialProvider for T {
                 .is_some_and(|project| project.enabled),
             None => true,
         };
+        // A suspended project's keys stop, like a disabled one's. They come back as soon as
+        // it's paid for, because nothing about the keys themselves changed.
+        let suspended = match cred.project_id {
+            Some(project_id) => self
+                .get_subscription(project_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|sub| sub.state == loony_metadata::SubscriptionState::Suspended),
+            None => false,
+        };
         Some(SigningCredential {
             secret_key: cred.secret_key,
             owner_id: cred.owner_id,
-            enabled: cred.enabled && project_enabled,
+            enabled: cred.enabled && project_enabled && !suspended,
             kind: cred.kind,
             user_id: cred.user_id,
             expires_at: cred.expires_at,

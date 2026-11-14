@@ -13,6 +13,7 @@ path = "src/main.rs"
 tempfile.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 loony-core = { path = "../core" }
 loony-cluster = { path = "../cluster" }
 loony-storage = { path = "../storage" }

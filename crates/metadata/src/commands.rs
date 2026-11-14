@@ -251,8 +251,6 @@ pub struct User {
     pub name: Option<String>,
     /// Whether an admin has blocked this user from LS3.
     pub enabled: bool,
-    /// Whether an admin has approved this user to create projects.
-    pub can_create_projects: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -273,7 +271,6 @@ pub struct UserSignIn {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UserAccess {
     pub enabled: bool,
-    pub can_create_projects: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

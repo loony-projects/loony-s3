@@ -40,6 +40,7 @@ impl From<MetaError> for AdminError {
             | MetaError::NodeRemoved(_)
             | MetaError::OwnerAlreadyInProject(_)
             | MetaError::OwnerIsAdmin(_) => StatusCode::CONFLICT,
+            MetaError::NoSuchGiftCode => StatusCode::NOT_FOUND,
             MetaError::InvalidContinuationToken => StatusCode::BAD_REQUEST,
             MetaError::RaftUnavailable(_) => {
                 return Self::new(
@@ -66,6 +67,12 @@ struct Body<'a> {
 
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
-        (self.status, Json(Body { message: &self.message })).into_response()
+        (
+            self.status,
+            Json(Body {
+                message: &self.message,
+            }),
+        )
+            .into_response()
     }
 }

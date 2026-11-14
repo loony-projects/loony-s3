@@ -10,14 +10,16 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
+use loony_console::{BillingConfig, BillingMode};
 use loony_console::{
     ConsoleConfig, ConsoleState, MAX_ACCESS_KEYS_PER_PROJECT, MAX_PROJECTS_PER_USER, build_router,
     delete_expired_credentials,
 };
 use loony_core::{NodeId, OwnerId, UserId, VolumeId};
+use loony_metadata::billing::gift_code_hash;
 use loony_metadata::{
-    CreateInvite, Credential, CredentialKind, MetadataStore, ProjectRole, RedbMetadataStore,
-    UserAccess, UserSignIn,
+    CreateInvite, Credential, CredentialKind, MetadataStore, NewGiftCode, ProjectRole,
+    RedbMetadataStore, UserAccess, UserSignIn,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -93,6 +95,14 @@ fn signed(
 
 impl Harness {
     async fn new() -> Self {
+        Self::with_billing(BillingConfig {
+            mode: BillingMode::Test,
+            ..BillingConfig::default()
+        })
+        .await
+    }
+
+    async fn with_billing(billing: BillingConfig) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().to_path_buf();
         let metadata = Arc::new(
@@ -111,6 +121,7 @@ impl Harness {
                 redirect_uris: vec!["http://localhost:5173/callback".into()],
                 session_ttl: Duration::from_secs(3600),
                 client_ip_header: None,
+                billing,
             },
             metadata.clone(),
             REGION.into(),
@@ -145,7 +156,7 @@ impl Harness {
         }
     }
 
-    async fn person_with(&self, email: &str, verified: bool, approved: bool) -> Person {
+    async fn person_with(&self, email: &str, verified: bool) -> Person {
         let user = self
             .metadata
             .record_user_sign_in(UserSignIn {
@@ -158,13 +169,7 @@ impl Harness {
             .await
             .unwrap();
         self.metadata
-            .set_user_access(
-                user.user_id,
-                UserAccess {
-                    enabled: true,
-                    can_create_projects: approved,
-                },
-            )
+            .set_user_access(user.user_id, UserAccess { enabled: true })
             .await
             .unwrap();
 
@@ -197,7 +202,7 @@ impl Harness {
     }
 
     async fn person(&self, email: &str) -> Person {
-        self.person_with(email, true, true).await
+        self.person_with(email, true).await
     }
 
     async fn raw(&self, request: Request<Body>) -> (StatusCode, Vec<u8>) {
@@ -241,11 +246,53 @@ impl Harness {
         response
     }
 
+    /// A project that's been paid for, as most tests need.
     async fn project(&self, who: &Person, name: &str) -> String {
+        let project = self.unpaid_project(who, name).await;
+        self.give_credit(who, 100_000).await;
+        self.ok(
+            who,
+            "POST",
+            &format!("/projects/{project}/subscription"),
+            json!({}),
+        )
+        .await;
+        project
+    }
+
+    async fn unpaid_project(&self, who: &Person, name: &str) -> String {
         let project = self
             .ok(who, "POST", "/projects", json!({"name": name}))
             .await;
         project["id"].as_str().unwrap().to_string()
+    }
+
+    /// Makes a gift code and returns it, as an admin would.
+    async fn gift_code(&self, amount_paise: u64, max_uses: u32) -> String {
+        let code: String =
+            uuid::Uuid::new_v4().simple().to_string().to_uppercase()[..17].to_string();
+        self.metadata
+            .create_gift_code(NewGiftCode {
+                code_hash: gift_code_hash(&code),
+                hint: code[13..].to_string(),
+                amount_paise,
+                expires_at: None,
+                max_uses,
+                note: None,
+                created_by: "test".into(),
+            })
+            .await
+            .unwrap();
+        code
+    }
+
+    /// Adds credit without going through the rate-limited redemption endpoint.
+    async fn give_credit(&self, who: &Person, amount_paise: u64) {
+        let code = self.gift_code(amount_paise, 1).await;
+        self.metadata
+            .redeem_gift_code(gift_code_hash(&code), who.id)
+            .await
+            .unwrap();
     }
 
     /// Adds `who` to the project through a real invite.
@@ -301,20 +348,13 @@ impl Harness {
 }
 
 #[tokio::test]
-async fn creating_a_project_needs_approval() {
+async fn anyone_can_create_a_project_and_it_starts_unpaid() {
     let h = Harness::new().await;
-    let unapproved = h.person_with("new@example.com", true, false).await;
-
+    let anyone = h.person("new@example.com").await;
     let (status, body) = h
-        .call(&unapproved, "POST", "/projects", json!({"name": "Mine"}))
+        .call(&anyone, "POST", "/projects", json!({"name": "  Mine  "}))
         .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body["code"], "not_approved");
-
-    let approved = h.person("ok@example.com").await;
-    let (status, body) = h
-        .call(&approved, "POST", "/projects", json!({"name": "  Mine  "}))
-        .await;
+    assert_eq!(body["subscription"], "unpaid");
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["name"], "Mine");
     assert_eq!(body["role"], "owner");
@@ -747,13 +787,7 @@ async fn disabling_a_user_cuts_off_their_sessions_but_not_the_apps() {
     let bobs_app_key = h.new_key(&bob, &project).await;
 
     h.metadata
-        .set_user_access(
-            bob.id,
-            UserAccess {
-                enabled: false,
-                can_create_projects: true,
-            },
-        )
+        .set_user_access(bob.id, UserAccess { enabled: false })
         .await
         .unwrap();
 
@@ -1227,7 +1261,7 @@ async fn an_invite_only_works_for_the_invited_verified_email() {
     }
 
     // Someone claiming that address without having verified it gets nowhere.
-    let claimant = h.person_with("bob@example.com", false, false).await;
+    let claimant = h.person_with("bob@example.com", false).await;
     let (status, body) = h
         .call(
             &claimant,
@@ -1627,4 +1661,827 @@ async fn changes_are_audited_without_any_secrets() {
         "a key's secret reached the audit log"
     );
     assert!(!log.contains(&alice.secret_key));
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+fn small_plan(storage_bytes: u64) -> BillingConfig {
+    BillingConfig {
+        mode: BillingMode::Test,
+        plans: vec![loony_metadata::Plan {
+            id: "small".into(),
+            name: "Small".into(),
+            price_paise: 100_000,
+            storage_bytes,
+            period: loony_metadata::BillingPeriod::Months(1),
+        }],
+        ..BillingConfig::default()
+    }
+}
+
+impl Harness {
+    async fn s3_with_body(
+        &self,
+        key: &(String, String),
+        method: &str,
+        uri: &str,
+        body: &[u8],
+    ) -> (StatusCode, String) {
+        let (status, bytes) = self
+            .raw(signed(method, uri, &key.0, &key.1, body.to_vec()))
+            .await;
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    async fn billing_step(&self, at: OffsetDateTime) -> usize {
+        let audit = loony_admin::AuditLog::new(self.audit_path.clone());
+        let timings = loony_metadata::BillingTimings::default();
+        loony_console::run_billing_once(self.metadata.as_ref(), &audit, timings, at)
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn an_unpaid_project_can_be_opened_but_holds_nothing() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let project = h.unpaid_project(&alice, "P").await;
+
+    let sub = h
+        .ok(
+            &alice,
+            "GET",
+            &format!("/projects/{project}/subscription"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(sub["state"], "unpaid");
+    assert_eq!(sub["usage"]["bytes"], 0);
+    assert!(sub["usage"]["limit_bytes"].is_null());
+
+    let session = h.session_key(&alice, &project).await;
+    assert_eq!(
+        h.s3(&session, "GET", "/", b"").await,
+        StatusCode::OK,
+        "it can be opened"
+    );
+    let (status, body) = h.s3_with_body(&session, "PUT", "/unpaid-bucket", b"").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        body.contains("<Code>ProjectReadOnly</Code>") && body.contains("Subscribe"),
+        "{body}"
+    );
+
+    let (status, body) = h
+        .call(
+            &alice,
+            "POST",
+            &format!("/projects/{project}/keys"),
+            json!({"name": "K"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "subscription_required");
+}
+
+#[tokio::test]
+async fn subscribing_takes_the_price_from_credit() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let project = h.unpaid_project(&alice, "P").await;
+    let path = format!("/projects/{project}/subscription");
+
+    let (status, body) = h.call(&alice, "POST", &path, json!({})).await;
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(body["code"], "insufficient_credit");
+    assert!(
+        body["message"].as_str().unwrap().contains("₹1,000"),
+        "{body}"
+    );
+
+    h.give_credit(&alice, 150_000).await;
+    let sub = h
+        .ok(&alice, "POST", &path, json!({"plan_id": "standard"}))
+        .await;
+    assert_eq!(sub["state"], "active");
+    assert_eq!(sub["plan"]["price_paise"], 100_000);
+    assert_eq!(sub["usage"]["limit_bytes"], 15u64 << 30);
+    assert_eq!(sub["payer_is_me"], true);
+
+    let billing = h.ok(&alice, "GET", "/billing", Value::Null).await;
+    assert_eq!(billing["balance_paise"], 50_000);
+    assert_eq!(billing["checkout"], "test");
+    assert_eq!(billing["plans"][0]["id"], "standard");
+
+    let (status, body) = h.call(&alice, "POST", &path, json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "already_paid");
+    let (status, _) = h
+        .call(&alice, "POST", &path, json!({"plan_id": "no-such-plan"}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let ledger = h.ok(&alice, "GET", "/billing/ledger", Value::Null).await;
+    assert_eq!(ledger[0]["amount_paise"], -100_000);
+    assert_eq!(ledger[0]["description"], "Subscription: P");
+    assert!(
+        ledger[1]["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("Gift code …")
+    );
+
+    let project_view = h
+        .ok(&alice, "GET", &format!("/projects/{project}"), Value::Null)
+        .await;
+    assert_eq!(project_view["subscription"], "active");
+}
+
+#[tokio::test]
+async fn billing_endpoints_respect_roles() {
+    use StatusCode as S;
+    // Each row runs on a fresh harness: (method, path, body, owner, member)
+    let rows: [(&str, &str, Value, S, S); 5] = [
+        (
+            "GET",
+            "/projects/{p}/subscription",
+            Value::Null,
+            S::OK,
+            S::OK,
+        ),
+        (
+            "POST",
+            "/projects/{p}/subscription/cancel",
+            Value::Null,
+            S::OK,
+            S::FORBIDDEN,
+        ),
+        (
+            "POST",
+            "/projects/{p}/subscription/resume",
+            Value::Null,
+            S::OK,
+            S::FORBIDDEN,
+        ),
+        (
+            "POST",
+            "/projects/{p}/subscription/renew",
+            Value::Null,
+            S::CONFLICT,
+            S::FORBIDDEN,
+        ),
+        (
+            "POST",
+            "/billing/checkouts",
+            json!({"amount_paise": 500, "project_id": "{p}"}),
+            S::CREATED,
+            S::FORBIDDEN,
+        ),
+    ];
+    for (method, path, body, owner_status, member_status) in rows {
+        for (label, expected) in [
+            ("owner", owner_status),
+            ("member", member_status),
+            ("outsider", S::NOT_FOUND),
+        ] {
+            let h = Harness::new().await;
+            let owner = h.person("owner@example.com").await;
+            let member = h.person("member@example.com").await;
+            let outsider = h.person("outsider@example.com").await;
+            let project = h.project(&owner, "P").await;
+            h.join(&owner, &project, &member, "member@example.com", "member")
+                .await;
+            for who in [&owner, &member, &outsider] {
+                h.give_credit(who, 200_000).await;
+            }
+            let path = path.replace("{p}", &project);
+            let body: Value =
+                serde_json::from_str(&body.to_string().replace("{p}", &project)).unwrap();
+            let who = match label {
+                "owner" => &owner,
+                "member" => &member,
+                _ => &outsider,
+            };
+            let (status, response) = h.call(who, method, &path, body).await;
+            assert_eq!(status, expected, "{label}: {method} {path} -> {response}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_member_cant_subscribe_for_the_project() {
+    let h = Harness::new().await;
+    let owner = h.person("owner@example.com").await;
+    let member = h.person("member@example.com").await;
+    let paid = h.project(&owner, "Paid").await;
+    h.join(&owner, &paid, &member, "member@example.com", "member")
+        .await;
+    let unpaid = h.unpaid_project(&owner, "Unpaid").await;
+    h.join(&owner, &unpaid, &member, "member@example.com", "member")
+        .await;
+    h.give_credit(&member, 200_000).await;
+
+    let (status, body) = h
+        .call(
+            &member,
+            "POST",
+            &format!("/projects/{unpaid}/subscription"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "owner_only");
+    let balance = h.ok(&member, "GET", "/billing", Value::Null).await["balance_paise"].clone();
+    assert_eq!(balance, 200_000, "nothing charged");
+}
+
+#[tokio::test]
+async fn gift_codes_are_redeemed_once_per_person() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let bob = h.person("bob@example.com").await;
+    let code = h.gift_code(2_000_000, 5).await;
+
+    // People type codes with spaces, dashes and lowercase.
+    let typed = format!(
+        "{}-{} {}",
+        code[..5].to_lowercase(),
+        &code[5..10],
+        &code[10..]
+    );
+    let redeemed = h
+        .ok(
+            &alice,
+            "POST",
+            "/billing/gift-codes/redeem",
+            json!({"code": typed}),
+        )
+        .await;
+    assert_eq!(redeemed["amount_paise"], 2_000_000);
+    assert_eq!(redeemed["balance_paise"], 2_000_000);
+
+    let (status, body) = h
+        .call(
+            &alice,
+            "POST",
+            "/billing/gift-codes/redeem",
+            json!({"code": code}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "gift_code_already_redeemed");
+    h.ok(
+        &bob,
+        "POST",
+        "/billing/gift-codes/redeem",
+        json!({"code": code}),
+    )
+    .await;
+
+    for bad in ["", "SHORT", "U97D9FS8F0S7DF09S", "!!!!!!!!!!!!!!!!!"] {
+        let (status, body) = h
+            .call(
+                &bob,
+                "POST",
+                "/billing/gift-codes/redeem",
+                json!({"code": bad}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad:?}");
+        assert_eq!(body["code"], "gift_code_invalid");
+    }
+
+    let single = h.gift_code(100, 1).await;
+    h.ok(
+        &alice,
+        "POST",
+        "/billing/gift-codes/redeem",
+        json!({"code": single}),
+    )
+    .await;
+    let (status, body) = h
+        .call(
+            &bob,
+            "POST",
+            "/billing/gift-codes/redeem",
+            json!({"code": single}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "gift_code_used_up");
+
+    let log = std::fs::read_to_string(&h.audit_path).unwrap();
+    assert!(
+        log.matches("\"action\":\"gift_code.redeem\"").count() >= 8,
+        "every attempt is recorded"
+    );
+    assert!(!log.contains(&code), "codes never reach the audit log");
+}
+
+#[tokio::test]
+async fn redeeming_is_rate_limited() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    for _ in 0..10 {
+        let (status, _) = h
+            .call(
+                &alice,
+                "POST",
+                "/billing/gift-codes/redeem",
+                json!({"code": "AAAAAAAAAAAAAAAAA"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+    let (status, body) = h
+        .call(
+            &alice,
+            "POST",
+            "/billing/gift-codes/redeem",
+            json!({"code": "AAAAAAAAAAAAAAAAA"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["code"], "too_many_requests");
+
+    // Even a real code waits.
+    let code = h.gift_code(500, 1).await;
+    let (status, _) = h
+        .call(
+            &alice,
+            "POST",
+            "/billing/gift-codes/redeem",
+            json!({"code": code}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_test_checkout_adds_credit_and_can_finish_the_subscription() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let bob = h.person("bob@example.com").await;
+    let project = h.unpaid_project(&alice, "P").await;
+
+    for amount in [0, 99, 10_000_001u64] {
+        let (status, _) = h
+            .call(
+                &alice,
+                "POST",
+                "/billing/checkouts",
+                json!({"amount_paise": amount}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{amount}");
+    }
+
+    let checkout = h
+        .ok(
+            &alice,
+            "POST",
+            "/billing/checkouts",
+            json!({"amount_paise": 100_000, "project_id": project, "plan_id": "standard"}),
+        )
+        .await;
+    assert_eq!(checkout["status"], "pending");
+    assert_eq!(checkout["action"]["kind"], "confirm_here");
+    let id = checkout["id"].as_str().unwrap();
+
+    let (status, _) = h
+        .call(
+            &bob,
+            "GET",
+            &format!("/billing/checkouts/{id}"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "someone else's checkout");
+    let (status, _) = h
+        .call(
+            &bob,
+            "POST",
+            &format!("/billing/checkouts/{id}/confirm"),
+            json!({"outcome": "succeed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = h
+        .call(
+            &alice,
+            "POST",
+            &format!("/billing/checkouts/{id}/confirm"),
+            json!({"outcome": "maybe"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let done = h
+        .ok(
+            &alice,
+            "POST",
+            &format!("/billing/checkouts/{id}/confirm"),
+            json!({"outcome": "succeed"}),
+        )
+        .await;
+    assert_eq!(done["checkout"]["status"], "succeeded");
+    assert_eq!(done["subscription"]["state"], "active", "{done}");
+    assert_eq!(done["balance_paise"], 0);
+
+    // Confirming again changes nothing.
+    let again = h
+        .ok(
+            &alice,
+            "POST",
+            &format!("/billing/checkouts/{id}/confirm"),
+            json!({"outcome": "succeed"}),
+        )
+        .await;
+    assert_eq!(again["balance_paise"], 0);
+    assert_eq!(again["checkout"]["status"], "succeeded");
+
+    let failing = h
+        .ok(
+            &alice,
+            "POST",
+            "/billing/checkouts",
+            json!({"amount_paise": 5_000}),
+        )
+        .await;
+    let fid = failing["id"].as_str().unwrap();
+    let failed = h
+        .ok(
+            &alice,
+            "POST",
+            &format!("/billing/checkouts/{fid}/confirm"),
+            json!({"outcome": "fail"}),
+        )
+        .await;
+    assert_eq!(failed["checkout"]["status"], "failed");
+    assert_eq!(failed["balance_paise"], 0);
+
+    let ledger = h.ok(&alice, "GET", "/billing/ledger", Value::Null).await;
+    assert_eq!(
+        ledger.as_array().unwrap().len(),
+        2,
+        "one payment in, one subscription out"
+    );
+    assert_eq!(ledger[1]["description"], "Test payment");
+
+    // The test provider takes no notifications.
+    let webhook = Request::builder()
+        .method("POST")
+        .uri("/_console/v1/billing/webhooks/test")
+        .body(Body::from("{}"))
+        .unwrap();
+    assert_eq!(h.raw(webhook).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn without_test_mode_there_is_no_checkout() {
+    let h = Harness::with_billing(BillingConfig::default()).await;
+    let alice = h.person("alice@example.com").await;
+    let billing = h.ok(&alice, "GET", "/billing", Value::Null).await;
+    assert!(billing["checkout"].is_null());
+    let (status, body) = h
+        .call(
+            &alice,
+            "POST",
+            "/billing/checkouts",
+            json!({"amount_paise": 5_000}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "checkout_unavailable");
+}
+
+#[tokio::test]
+async fn uploads_over_the_plan_are_refused_on_the_s3_api() {
+    let h = Harness::with_billing(small_plan(1_000)).await;
+    let alice = h.person("alice@example.com").await;
+    let project = h.unpaid_project(&alice, "P").await;
+    h.give_credit(&alice, 100_000).await;
+    h.ok(
+        &alice,
+        "POST",
+        &format!("/projects/{project}/subscription"),
+        json!({}),
+    )
+    .await;
+    let key = h.new_key(&alice, &project).await;
+
+    assert_eq!(
+        h.s3(&key, "PUT", "/quota-bucket", b"").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.s3(&key, "PUT", "/quota-bucket/a", &[1; 900]).await,
+        StatusCode::OK
+    );
+    let (status, body) = h
+        .s3_with_body(&key, "PUT", "/quota-bucket/b", &[1; 101])
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains("<Code>QuotaExceeded</Code>"), "{body}");
+    assert_eq!(
+        h.s3(&key, "GET", "/quota-bucket/b", b"").await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.s3(&key, "PUT", "/quota-bucket/b", &[1; 100]).await,
+        StatusCode::OK,
+        "exactly full is fine"
+    );
+
+    let sub = h
+        .ok(
+            &alice,
+            "GET",
+            &format!("/projects/{project}/subscription"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(sub["usage"]["bytes"], 1_000);
+    assert_eq!(sub["usage"]["objects"], 2);
+    assert_eq!(sub["usage"]["limit_bytes"], 1_000);
+
+    assert_eq!(
+        h.s3(&key, "DELETE", "/quota-bucket/a", b"").await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        h.s3(&key, "PUT", "/quota-bucket/c", &[1; 900]).await,
+        StatusCode::OK,
+        "deleting makes room"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_uploads_cant_exceed_the_plan() {
+    let h = Arc::new(Harness::with_billing(small_plan(1_000)).await);
+    let alice = h.person("alice@example.com").await;
+    let project = h.unpaid_project(&alice, "P").await;
+    h.give_credit(&alice, 100_000).await;
+    h.ok(
+        &alice,
+        "POST",
+        &format!("/projects/{project}/subscription"),
+        json!({}),
+    )
+    .await;
+    let key = h.new_key(&alice, &project).await;
+    assert_eq!(h.s3(&key, "PUT", "/race", b"").await, StatusCode::OK);
+
+    let tasks: Vec<_> = (0..25)
+        .map(|i| {
+            let h = h.clone();
+            let key = key.clone();
+            tokio::spawn(async move { h.s3(&key, "PUT", &format!("/race/f{i}"), &[7; 100]).await })
+        })
+        .collect();
+    let mut ok = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            StatusCode::OK => ok += 1,
+            StatusCode::FORBIDDEN => {}
+            other => panic!("unexpected {other}"),
+        }
+    }
+    assert_eq!(ok, 10, "as many as fit, and no more");
+    let usage = h
+        .metadata
+        .get_usage(
+            h.metadata
+                .get_project(project.parse().unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .owner_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(usage.bytes, 1_000);
+}
+
+#[tokio::test]
+async fn a_lapsed_project_goes_read_only_then_suspended_and_paying_restores_it() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let project = h.project(&alice, "P").await;
+    let key = h.new_key(&alice, &project).await;
+    assert_eq!(h.s3(&key, "PUT", "/lapse", b"").await, StatusCode::OK);
+    assert_eq!(
+        h.s3(&key, "PUT", "/lapse/kept", b"precious").await,
+        StatusCode::OK
+    );
+
+    let sub = h
+        .ok(
+            &alice,
+            "GET",
+            &format!("/projects/{project}/subscription"),
+            Value::Null,
+        )
+        .await;
+    let end = OffsetDateTime::parse(
+        sub["period_end"].as_str().unwrap(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    let path = format!("/projects/{project}/subscription");
+    let state = || h.ok(&alice, "GET", &path, Value::Null);
+
+    // The period ends with no credit: grace, and everything still works.
+    assert_eq!(h.billing_step(end).await, 1);
+    let grace = state().await;
+    assert_eq!(grace["state"], "grace");
+    assert!(grace["read_only_at"].is_string());
+    assert_eq!(
+        h.s3(&key, "PUT", "/lapse/during-grace", b"x").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.billing_step(end).await,
+        0,
+        "running again changes nothing"
+    );
+
+    // Grace runs out: read-only.
+    h.billing_step(end + time::Duration::days(7)).await;
+    let read_only = state().await;
+    assert_eq!(read_only["state"], "read_only");
+    assert!(read_only["suspends_at"].is_string());
+    let (status, body) = h.s3_with_body(&key, "PUT", "/lapse/new", b"x").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        body.contains("<Code>ProjectReadOnly</Code>") && body.contains("read-only"),
+        "{body}"
+    );
+    assert_eq!(
+        h.s3(&key, "DELETE", "/lapse/kept", b"").await,
+        StatusCode::FORBIDDEN,
+        "no deletes either"
+    );
+    let (status, body) = h.s3_with_body(&key, "GET", "/lapse/kept", b"").await;
+    assert_eq!(
+        (status, body.as_str()),
+        (StatusCode::OK, "precious"),
+        "reading still works"
+    );
+    assert_eq!(
+        h.s3(&key, "GET", "/lapse?list-type=2", b"").await,
+        StatusCode::OK
+    );
+    let (status, body) = h
+        .call(
+            &alice,
+            "POST",
+            &format!("/projects/{project}/keys"),
+            json!({"name": "K"}),
+        )
+        .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("project_read_only"))
+    );
+
+    // Thirty days on: suspended, and nothing works, but nothing is deleted.
+    h.billing_step(end + time::Duration::days(37)).await;
+    assert_eq!(state().await["state"], "suspended");
+    assert_eq!(
+        h.s3(&key, "GET", "/lapse/kept", b"").await,
+        StatusCode::FORBIDDEN
+    );
+    let (status, body) = h
+        .call(
+            &alice,
+            "POST",
+            &format!("/projects/{project}/session"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("project_suspended"))
+    );
+
+    // Paying brings it all back at once.
+    h.give_credit(&alice, 100_000).await;
+    let renewed = h
+        .ok(
+            &alice,
+            "POST",
+            &format!("/projects/{project}/subscription/renew"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(renewed["state"], "active");
+    let (status, body) = h.s3_with_body(&key, "GET", "/lapse/kept", b"").await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "precious"));
+    assert_eq!(
+        h.s3(&key, "PUT", "/lapse/after", b"x").await,
+        StatusCode::OK
+    );
+
+    let log = std::fs::read_to_string(&h.audit_path).unwrap();
+    for action in [
+        "subscription.grace",
+        "subscription.read_only",
+        "subscription.suspend",
+        "subscription.renew_now",
+    ] {
+        assert!(
+            log.contains(&format!("\"action\":\"{action}\"")),
+            "missing {action}"
+        );
+    }
+    assert!(log.contains("\"actor\":\"system\""));
+}
+
+#[tokio::test]
+async fn renewals_come_from_credit_automatically() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let project = h.project(&alice, "P").await;
+    h.give_credit(&alice, 100_000).await;
+    let sub = h
+        .ok(
+            &alice,
+            "GET",
+            &format!("/projects/{project}/subscription"),
+            Value::Null,
+        )
+        .await;
+    let end = OffsetDateTime::parse(
+        sub["period_end"].as_str().unwrap(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+
+    assert_eq!(h.billing_step(end).await, 1);
+    let renewed = h
+        .ok(
+            &alice,
+            "GET",
+            &format!("/projects/{project}/subscription"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(renewed["state"], "active");
+    assert_eq!(renewed["period_start"], sub["period_end"]);
+    assert_eq!(
+        h.ok(&alice, "GET", "/billing", Value::Null).await["balance_paise"],
+        0
+    );
+    let ledger = h.ok(&alice, "GET", "/billing/ledger", Value::Null).await;
+    assert_eq!(ledger[0]["description"], "Renewal: P");
+}
+
+#[tokio::test]
+async fn cancelling_ends_with_the_paid_period() {
+    let h = Harness::new().await;
+    let alice = h.person("alice@example.com").await;
+    let project = h.project(&alice, "P").await;
+    h.give_credit(&alice, 500_000).await;
+    let key = h.new_key(&alice, &project).await;
+
+    let cancelled = h
+        .ok(
+            &alice,
+            "POST",
+            &format!("/projects/{project}/subscription/cancel"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(cancelled["cancel_at_period_end"], true);
+    assert_eq!(cancelled["state"], "active", "the paid period still runs");
+    assert_eq!(h.s3(&key, "PUT", "/cancelled", b"").await, StatusCode::OK);
+
+    let end = OffsetDateTime::parse(
+        cancelled["period_end"].as_str().unwrap(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    h.billing_step(end).await;
+    let after = h
+        .ok(
+            &alice,
+            "GET",
+            &format!("/projects/{project}/subscription"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(after["state"], "read_only");
+    assert_eq!(
+        h.ok(&alice, "GET", "/billing", Value::Null).await["balance_paise"],
+        500_000,
+        "never charged again"
+    );
+    assert_eq!(
+        h.s3(&key, "PUT", "/cancelled/x", b"x").await,
+        StatusCode::FORBIDDEN
+    );
 }

@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+getrandom = "0.3"
 loony-core = { path = "../core" }
 loony-metadata = { path = "../metadata" }
 loony-auth = { path = "../auth" }
