@@ -246,7 +246,14 @@ async fn main() -> std::process::ExitCode {
     });
 
     if let Some(ui) = &config.ui {
-        let ui_router = loony_console::ui_router(&ui.dir);
+        let settings = loony_console::UiSettings {
+            api_url: ui.public_api_url.clone(),
+            region: config.region.clone(),
+            admin_api_url: format!("http://{}", config.admin_addr),
+            oidc_issuer: config.console.as_ref().map(|c| c.issuer.clone()),
+            oidc_client_id: config.console.as_ref().map(|c| c.client_id.clone()),
+        };
+        let ui_router = loony_console::ui_router(&ui.dir, settings);
         let ui_listener = match tokio::net::TcpListener::bind(ui.addr).await {
             Ok(listener) => listener,
             Err(err) => {

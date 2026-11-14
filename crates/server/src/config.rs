@@ -95,6 +95,8 @@ pub struct Config {
 pub struct UiConfig {
     pub dir: PathBuf,
     pub addr: SocketAddr,
+    /// The LS3 API's address as browsers reach it, told to the UI in `/config.json`.
+    pub public_api_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -378,9 +380,26 @@ fn load_ui_config(env: &impl EnvSource) -> Result<Option<UiConfig>, ConfigError>
             reason: "has no index.html: build the web UI first".into(),
         });
     }
+    let public_api_url = env
+        .get("LS3_PUBLIC_API_URL")
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .ok_or(ConfigError::Invalid {
+            key: "LS3_PUBLIC_API_URL",
+            value: String::new(),
+            reason: "is needed with LS3_UI_DIR: the LS3 API's address as browsers reach it".into(),
+        })?;
+    if !is_secure_url(&public_api_url) {
+        return Err(ConfigError::Invalid {
+            key: "LS3_PUBLIC_API_URL",
+            value: public_api_url,
+            reason: "must be https, or http to this machine".into(),
+        });
+    }
     Ok(Some(UiConfig {
         dir,
         addr: parse_addr_or_default(env, "LS3_UI_ADDR", "127.0.0.1:7354")?,
+        public_api_url,
     }))
 }
 
@@ -692,12 +711,31 @@ mod tests {
         std::fs::write(site.path().join("index.html"), "app").unwrap();
         let path: &'static str =
             Box::leak(site.path().to_str().unwrap().to_string().into_boxed_str());
-        let ui = standalone_with(&[("LS3_UI_DIR", path)])
+        assert!(matches!(
+            standalone_with(&[("LS3_UI_DIR", path)]),
+            Err(ConfigError::Invalid {
+                key: "LS3_PUBLIC_API_URL",
+                ..
+            })
+        ));
+        assert!(matches!(
+            standalone_with(&[
+                ("LS3_UI_DIR", path),
+                ("LS3_PUBLIC_API_URL", "http://s3.example.com")
+            ]),
+            Err(ConfigError::Invalid {
+                key: "LS3_PUBLIC_API_URL",
+                ..
+            })
+        ));
+        let api = ("LS3_PUBLIC_API_URL", "https://s3.example.com/");
+        let ui = standalone_with(&[("LS3_UI_DIR", path), api])
             .unwrap()
             .ui
             .unwrap();
         assert_eq!(ui.addr.to_string(), "127.0.0.1:7354");
-        let ui = standalone_with(&[("LS3_UI_DIR", path), ("LS3_UI_ADDR", "127.0.0.1:9999")])
+        assert_eq!(ui.public_api_url, "https://s3.example.com");
+        let ui = standalone_with(&[("LS3_UI_DIR", path), api, ("LS3_UI_ADDR", "127.0.0.1:9999")])
             .unwrap()
             .ui
             .unwrap();

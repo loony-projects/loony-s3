@@ -15,7 +15,18 @@ fi
 # already set in the environment win, so one-off overrides still work. Values are not
 # exported: each script hands them to the server explicitly.
 load_dotenv() {
-  [[ -f "$DOTENV_FILE" ]] || return 0
+  read_env_file "$DOTENV_FILE" ''
+  # A second instance shares only sign-in with scripts/.env, so the client secret lives in
+  # one place and a dev copy can never pick up the live server's ports or data.
+  if [[ "$(realpath -m "$DOTENV_FILE")" != "$(realpath -m "$SCRIPTS_DIR/.env")" ]]; then
+    read_env_file "$SCRIPTS_DIR/.env" 'LS3_OIDC_'
+  fi
+}
+
+# Usage: read_env_file <file> <prefix>. Only keys starting with <prefix> are taken.
+read_env_file() {
+  local file="$1" prefix="$2"
+  [[ -f "$file" ]] || return 0
 
   local line key value
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -23,11 +34,12 @@ load_dotenv() {
     [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
     key="${BASH_REMATCH[2]}"
     value="${BASH_REMATCH[3]}"
+    [[ "$key" == "$prefix"* ]] || continue
     if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
       value="${BASH_REMATCH[1]}"
     fi
     [[ -n "${!key:-}" ]] || printf -v "$key" '%s' "$value"
-  done <"$DOTENV_FILE"
+  done <"$file"
 }
 
 # Exports every LS3_* setting, from the settings file or the environment, so the server

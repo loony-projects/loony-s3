@@ -3,10 +3,12 @@
 
 use std::path::Path;
 
-use axum::Router;
 use axum::http::{HeaderValue, Request, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
+use axum::routing::get;
+use axum::{Json, Router};
+use serde::Serialize;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -35,11 +37,34 @@ async fn cache_policy(request: Request<axum::body::Body>, next: Next) -> Respons
     response
 }
 
+/// What the UI needs to know about this server, read by the page when it starts, so one
+/// build works anywhere and every setting stays in the server's configuration. Nothing here
+/// is secret: it's all visible to anyone who opens the site.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct UiSettings {
+    /// The LS3 API, as browsers reach it.
+    pub api_url: String,
+    pub region: String,
+    /// The local-only admin API.
+    pub admin_api_url: String,
+    /// Sign in with Loony, when it's configured.
+    pub oidc_issuer: Option<String>,
+    pub oidc_client_id: Option<String>,
+}
+
 /// Any path that isn't a file gets `index.html`, since the UI handles its own addresses. A
 /// missing file under `assets/` stays a 404, so it isn't mistaken for a script.
-pub fn ui_router(dir: &Path) -> Router {
+pub fn ui_router(dir: &Path, settings: UiSettings) -> Router {
     let index = dir.join("index.html");
+    let settings = std::sync::Arc::new(settings);
     Router::new()
+        .route(
+            "/config.json",
+            get(move || {
+                let settings = settings.clone();
+                async move { Json((*settings).clone()) }
+            }),
+        )
         .nest_service("/assets", ServeDir::new(dir.join("assets")))
         .fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)))
         .layer(middleware::from_fn(cache_policy))
@@ -79,9 +104,19 @@ mod tests {
         dir
     }
 
+    fn settings() -> UiSettings {
+        UiSettings {
+            api_url: "https://s3.example.com".into(),
+            region: "us-east-1".into(),
+            admin_api_url: "http://127.0.0.1:7253".into(),
+            oidc_issuer: Some("https://auth.example.com".into()),
+            oidc_client_id: Some("client-1".into()),
+        }
+    }
+
     async fn get(dir: &Path, uri: &str) -> (StatusCode, axum::http::HeaderMap, String) {
         let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
-        let response = ui_router(dir).oneshot(request).await.unwrap();
+        let response = ui_router(dir, settings()).oneshot(request).await.unwrap();
         let status = response.status();
         let headers = response.headers().clone();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -161,5 +196,24 @@ mod tests {
         assert!(policy.contains("frame-ancestors \'none\'"));
         assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+    }
+
+    #[tokio::test]
+    async fn the_page_reads_its_settings_from_the_server() {
+        let site = site();
+        let (status, headers, body) = get(site.path(), "/config.json").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "api_url": "https://s3.example.com",
+                "region": "us-east-1",
+                "admin_api_url": "http://127.0.0.1:7253",
+                "oidc_issuer": "https://auth.example.com",
+                "oidc_client_id": "client-1",
+            })
+        );
     }
 }

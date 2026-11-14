@@ -33,7 +33,7 @@ pub use billing::{BillingConfig, BillingMode, run_billing_loop, run_billing_once
 pub use oidc::OidcClient;
 pub use projects::{MAX_ACCESS_KEYS_PER_PROJECT, MAX_PROJECTS_PER_USER};
 use rate_limit::RateLimiter;
-pub use ui::ui_router;
+pub use ui::{UiSettings, ui_router};
 
 /// Far more than the sign-in request needs, which is a few short strings.
 const MAX_BODY_BYTES: usize = 64 * 1024;
