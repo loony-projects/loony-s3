@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import { FolderOpen, KeyRound, Settings, Users } from 'lucide-react';
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { FolderOpen, Gauge, KeyRound, Settings, Users } from 'lucide-react';
 import { ApiError } from '@/api/client';
-import { consoleApi, Project } from '@/api/console';
+import { consoleApi, Project, Subscription } from '@/api/console';
+import { SubscriptionBanner } from '@/components/SubscriptionPanel';
+import { formatUsage } from '@/lib/format';
 import { PageError } from '@/components/PageError';
 import { Spinner } from '@/components/Spinner';
 import { BucketPage } from '@/pages/BucketPage';
@@ -11,10 +13,12 @@ import { useConsoleStore } from '@/store/useConsoleStore';
 import { Badge, useAdminData } from '../admin/shared';
 import { AccessKeysPage } from './AccessKeysPage';
 import { MembersPage } from './MembersPage';
+import { PlanPage } from './PlanPage';
 import { SettingsPage } from './SettingsPage';
 
 interface ProjectContextValue {
   project: Project;
+  subscription: Subscription;
   reload: () => Promise<void>;
 }
 
@@ -29,13 +33,13 @@ export function useProject(): ProjectContextValue {
 const pageShell = 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8';
 
 /** Fetches this project's key for the bucket pages, which sign with it. */
-function BucketArea({ project }: { project: Project }) {
+function BucketArea({ project, subscription }: { project: Project; subscription: Subscription }) {
   const projectKey = useConsoleStore((s) => s.projectKey);
   const setProjectKey = useConsoleStore((s) => s.setProjectKey);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!project.enabled) return;
+    if (!project.enabled || subscription.state === 'unpaid') return;
     let current = true;
     setError(null);
     consoleApi
@@ -50,12 +54,26 @@ function BucketArea({ project }: { project: Project }) {
       current = false;
       setProjectKey(null);
     };
-  }, [project.id, project.enabled, setProjectKey]);
+  }, [project.id, project.enabled, subscription.state, setProjectKey]);
 
   if (!project.enabled) {
     return (
       <div className={pageShell}>
         <PageError title="This project is disabled">An administrator has disabled this project, so its buckets and access keys don't work right now.</PageError>
+      </div>
+    );
+  }
+  if (subscription.state === 'unpaid') {
+    return (
+      <div className={pageShell}>
+        <PageError title="Nothing here yet">
+          This project isn't paid for, so it can't hold buckets.{' '}
+          {project.role === 'owner' ? (
+            <NavLink to={`/projects/${project.id}/plan`} className="font-medium underline underline-offset-2">Subscribe to start</NavLink>
+          ) : (
+            'Ask a project Owner to subscribe.'
+          )}
+        </PageError>
       </div>
     );
   }
@@ -81,6 +99,7 @@ const tabs = [
   { to: 'buckets', label: 'Buckets', icon: FolderOpen },
   { to: 'keys', label: 'Access keys', icon: KeyRound },
   { to: 'members', label: 'Members', icon: Users },
+  { to: 'plan', label: 'Plan', icon: Gauge },
   { to: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -106,12 +125,15 @@ function ProjectSwitcher({ project }: { project: Project }) {
 export function ProjectLayout() {
   const { projectId } = useParams();
   const [project, setProject] = useState<Project | null>(null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const reload = useCallback(async () => {
     if (!projectId) return;
     try {
-      setProject(await consoleApi.project(projectId));
+      const [loaded, sub] = await Promise.all([consoleApi.project(projectId), consoleApi.subscription(projectId)]);
+      setProject(loaded);
+      setSubscription(sub);
       setError(null);
     } catch (err) {
       setError(err);
@@ -120,11 +142,22 @@ export function ProjectLayout() {
 
   useEffect(() => {
     setProject(null);
+    setSubscription(null);
     setError(null);
     void reload();
   }, [reload]);
 
-  const contextValue = useMemo(() => (project ? { project, reload } : null), [project, reload]);
+  // Usage and state change as people upload and pay, so refresh them on each page change.
+  const location = useLocation();
+  useEffect(() => {
+    if (!projectId) return;
+    consoleApi.subscription(projectId).then(setSubscription).catch(() => undefined);
+  }, [projectId, location.pathname]);
+
+  const contextValue = useMemo(
+    () => (project && subscription ? { project, subscription, reload } : null),
+    [project, subscription, reload],
+  );
 
   if (error) {
     const missing = error instanceof ApiError && error.status === 404;
@@ -147,7 +180,17 @@ export function ProjectLayout() {
           <ProjectSwitcher project={project} />
           <Badge tone={project.role === 'owner' ? 'blue' : 'gray'}>{project.role === 'owner' ? 'Owner' : 'Member'}</Badge>
           {!project.enabled && <Badge tone="red">Disabled</Badge>}
+          {subscription && subscription.state !== 'unpaid' && (
+            <span className="ml-auto text-sm text-gray-500 whitespace-nowrap">
+              {formatUsage(subscription.usage.bytes + subscription.usage.pending_bytes, subscription.usage.limit_bytes)}
+            </span>
+          )}
         </div>
+        {subscription && project.enabled && (
+          <div className="mb-3">
+            <SubscriptionBanner subscription={subscription} projectId={project.id} isOwner={project.role === 'owner'} />
+          </div>
+        )}
         <nav aria-label="Project sections" className="flex gap-1 border-b border-gray-200 overflow-x-auto">
           {tabs.map(({ to, label, icon: Icon }) => (
             <NavLink
@@ -167,7 +210,8 @@ export function ProjectLayout() {
       </div>
       <Routes>
         <Route index element={<Navigate to="buckets" replace />} />
-        <Route path="buckets/*" element={<BucketArea project={project} />} />
+        <Route path="buckets/*" element={<BucketArea project={project} subscription={contextValue.subscription} />} />
+        <Route path="plan" element={<div className={pageShell}><PlanPage /></div>} />
         <Route path="keys" element={<div className={pageShell}><AccessKeysPage /></div>} />
         <Route path="members" element={<div className={pageShell}><MembersPage /></div>} />
         <Route path="settings" element={<div className={pageShell}><SettingsPage /></div>} />

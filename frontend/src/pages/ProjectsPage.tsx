@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FolderKanban, Mail, Plus } from 'lucide-react';
 import { consoleApi, IncomingInvite, Project } from '@/api/console';
@@ -8,7 +8,7 @@ import { PageState } from '@/components/PageError';
 import { Spinner } from '@/components/Spinner';
 import { useToast } from '@/context/ToastContext';
 import { formatDate } from '@/lib/format';
-import { useConsoleStore } from '@/store/useConsoleStore';
+import { SubscriptionBadge } from '@/components/SubscriptionPanel';
 import { Badge, errorMessage, useAdminAction, useAdminData } from './admin/shared';
 
 const roleLabel = { owner: 'Owner', member: 'Member' };
@@ -22,7 +22,7 @@ function ProjectCard({ project }: { project: Project }) {
       </div>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-gray-400">Created {formatDate(project.created_at)}</p>
-        {!project.enabled && <Badge tone="red">Disabled</Badge>}
+        {!project.enabled ? <Badge tone="red">Disabled</Badge> : <SubscriptionBadge state={project.subscription} />}
       </div>
     </Link>
   );
@@ -88,15 +88,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
 export function ProjectsPage() {
   const { data, error, loading, reload } = useAdminData(consoleApi.projects);
   const { busy, run } = useAdminAction(reload);
-  const user = useConsoleStore((s) => s.session?.user);
-  const setUser = useConsoleStore((s) => s.setUser);
   const [creating, setCreating] = useState(false);
-  const canCreate = user?.can_create_projects ?? false;
-
-  // An admin may have approved them since they signed in.
-  useEffect(() => {
-    consoleApi.me().then(setUser).catch(() => undefined);
-  }, [setUser]);
 
   const invites: IncomingInvite[] = data?.invites ?? [];
   const nothing = data && data.created.length === 0 && data.joined.length === 0 && invites.length === 0;
@@ -105,11 +97,9 @@ export function ProjectsPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="flex items-center justify-between gap-4 mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Projects</h1>
-        {canCreate && (
-          <button onClick={() => setCreating(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap">
-            <Plus className="w-4 h-4" /> New project
-          </button>
-        )}
+        <button onClick={() => setCreating(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap">
+          <Plus className="w-4 h-4" /> New project
+        </button>
       </div>
 
       <PageState error={error} loading={loading} hasData={data !== null}>
@@ -117,17 +107,11 @@ export function ProjectsPage() {
           <EmptyState
             icon={<FolderKanban className="w-16 h-16" />}
             title="No projects yet"
-            description={
-              canCreate
-                ? 'Create a project to start storing files, or ask someone to invite you to theirs.'
-                : `Ask someone to invite you to their project using ${user?.email ?? 'your email address'}. To create your own, an administrator has to approve your account first.`
-            }
+            description="Create a project to start storing files, or ask someone to invite you to theirs."
             action={
-              canCreate ? (
-                <button onClick={() => setCreating(true)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
-                  New project
-                </button>
-              ) : undefined
+              <button onClick={() => setCreating(true)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+                New project
+              </button>
             }
           />
         )}

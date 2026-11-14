@@ -9,7 +9,6 @@ export interface ConsoleUser {
   email: string | null;
   email_verified: boolean;
   name: string | null;
-  can_create_projects: boolean;
 }
 
 export interface ConsoleSession {

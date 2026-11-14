@@ -5,7 +5,8 @@ import { EmptyState } from '@/components/EmptyState';
 import { Modal } from '@/components/Modal';
 import { Spinner } from '@/components/Spinner';
 import { useToast } from '@/context/ToastContext';
-import { formatBytes, formatDate } from '@/lib/format';
+import { formatBytes, formatDate, formatUsage } from '@/lib/format';
+import { SubscriptionBadge } from '@/components/SubscriptionPanel';
 import { AdminPageState, Badge, PageHeader, ShortId, Table, dangerButton, errorMessage, secondaryButton, useAdminAction, useAdminData } from './shared';
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -75,7 +76,8 @@ function AdoptModal({ owners, onClose, onAdopted }: { owners: AdoptableOwner[]; 
           <p className="mt-1.5 text-xs text-gray-500">Only people who have signed in at least once are listed.</p>
         </div>
         <p className="text-xs text-gray-500">
-          The account's buckets and keys move into the project, and apps using those keys keep working. This can't be undone from here.
+          The account's buckets and keys move into the project, and apps using those keys can keep reading. The project starts unpaid, so they can't
+          upload or change anything until an Owner subscribes. This can't be undone from here.
         </p>
       </form>
     </Modal>
@@ -116,7 +118,7 @@ export function ProjectsPage() {
           <EmptyState icon={<FolderKanban className="w-16 h-16" />} title="No projects yet" description="Approve someone under Users, and they can create one." />
         ) : (
           data && (
-            <Table headers={['Project', 'Status', 'Members', 'Access keys', 'Buckets', 'Objects', 'Size', 'Created', '']}>
+            <Table headers={['Project', 'Status', 'Subscription', 'Members', 'Access keys', 'Buckets', 'Objects', 'Storage', 'Created', '']}>
               {data.map((project) => (
                 <tr key={project.id}>
                   <td className="px-4 py-3 min-w-[10rem]">
@@ -124,6 +126,12 @@ export function ProjectsPage() {
                     <ShortId value={project.owner_id} />
                   </td>
                   <td className="px-4 py-3"><Badge tone={project.enabled ? 'green' : 'red'}>{project.enabled ? 'Enabled' : 'Disabled'}</Badge></td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <SubscriptionBadge state={project.subscription} />
+                    {project.period_end && project.subscription === 'active' && (
+                      <div className="text-xs text-gray-500 mt-1">{project.cancel_at_period_end ? 'Ends' : 'Renews'} {formatDate(project.period_end)}</div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 min-w-[12rem]">
                     {project.members.map((member) => (
                       <div key={member.user_id} className="text-gray-700 break-words">
@@ -134,7 +142,7 @@ export function ProjectsPage() {
                   <td className="px-4 py-3 tabular-nums text-gray-700">{project.access_keys.toLocaleString()}</td>
                   <td className="px-4 py-3 tabular-nums text-gray-700">{project.buckets.toLocaleString()}</td>
                   <td className="px-4 py-3 tabular-nums text-gray-700">{project.objects.toLocaleString()}</td>
-                  <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap">{formatBytes(project.bytes)}</td>
+                  <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap">{formatUsage(project.bytes, project.limit_bytes)}</td>
                   <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(project.created_at)}</td>
                   <td className="px-4 py-3 text-right">
                     <button className={project.enabled ? dangerButton : secondaryButton} disabled={busy !== null} onClick={() => toggle(project)}>

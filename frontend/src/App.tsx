@@ -9,6 +9,8 @@ import { LoginPage } from '@/pages/LoginPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { BucketPage } from '@/pages/BucketPage';
 import { ProjectsPage } from '@/pages/ProjectsPage';
+import { BillingPage } from '@/pages/BillingPage';
+import { CheckoutPage } from '@/pages/CheckoutPage';
 import { ProjectLayout } from '@/pages/project/ProjectLayout';
 import { AdminLayout } from '@/pages/admin/AdminLayout';
 
@@ -47,6 +49,8 @@ function ConsoleRoutes() {
     <Routes>
       <Route path="/" element={<ProjectsPage />} />
       <Route path="/projects/:projectId/*" element={<ProjectLayout />} />
+      <Route path="/billing" element={<BillingPage />} />
+      <Route path="/billing/checkout/:checkoutId" element={<CheckoutPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

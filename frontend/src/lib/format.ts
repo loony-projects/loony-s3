@@ -22,3 +22,14 @@ export function fileExtension(key: string): string {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 }
+
+/** Rupees from paise, grouped the Indian way: ₹1,00,000. Whole rupees drop the paise. */
+export function formatRupees(paise: number): string {
+  const rupees = paise / 100;
+  return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: paise % 100 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`;
+}
+
+/** "4.2 GB of 15 GB", or just the amount used when there's no limit. */
+export function formatUsage(bytes: number, limit: number | null): string {
+  return limit === null ? formatBytes(bytes) : `${formatBytes(bytes)} of ${formatBytes(limit)}`;
+}

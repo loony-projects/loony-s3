@@ -123,7 +123,6 @@ export interface AdminUser {
   email_verified: boolean;
   name: string | null;
   enabled: boolean;
-  can_create_projects: boolean;
   created_at: string;
   last_sign_in_at: string;
 }
@@ -139,6 +138,25 @@ export interface AdminProject {
   buckets: number;
   objects: number;
   bytes: number;
+  subscription: 'unpaid' | 'active' | 'grace' | 'read_only' | 'suspended';
+  plan_name: string | null;
+  limit_bytes: number | null;
+  period_end: string | null;
+  cancel_at_period_end: boolean;
+}
+
+export interface GiftCode {
+  id: string;
+  hint: string;
+  amount_paise: number;
+  max_uses: number;
+  uses: number;
+  disabled: boolean;
+  expires_at: string | null;
+  note: string | null;
+  created_by: string;
+  created_at: string;
+  redemptions: { user_id: string; email: string | null; amount_paise: number; at: string }[];
 }
 
 export interface AdoptableOwner {
@@ -151,7 +169,12 @@ export interface AdoptableOwner {
 
 export const adminApi = {
   users: () => adminRequest<AdminUser[]>('GET', '/users'),
-  updateUser: (id: string, change: { enabled?: boolean; can_create_projects?: boolean }) =>
+  giftCodes: () => adminRequest<GiftCode[]>('GET', '/gift-codes'),
+  createGiftCode: (request: { amount_paise: number; max_uses: number; expires_at: string | null; note: string | null }) =>
+    adminRequest<GiftCode & { code: string }>('POST', '/gift-codes', { json: request }),
+  setGiftCodeDisabled: (id: string, disabled: boolean) => adminRequest<GiftCode>('PATCH', `/gift-codes/${id}`, { json: { disabled } }),
+
+  updateUser: (id: string, change: { enabled?: boolean }) =>
     adminRequest<AdminUser>('PATCH', `/users/${id}`, { json: change }),
 
   projects: () => adminRequest<AdminProject[]>('GET', '/projects'),

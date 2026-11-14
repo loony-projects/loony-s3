@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { Database, LogOut, KeyRound, ShieldCheck, UserRound } from 'lucide-react';
+import { Database, LogOut, KeyRound, ShieldCheck, UserRound, Wallet } from 'lucide-react';
 import { consoleApi } from '@/api/console';
 import { identityProviderLogoutUrl } from '@/lib/oidc';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -39,6 +39,12 @@ export function Navbar() {
 
           {(session || accessKey) && (
             <div className="flex items-center gap-4 min-w-0">
+              {session && (
+                <Link to="/billing" className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-blue-600 transition-colors">
+                  <Wallet className="w-4 h-4" />
+                  <span>Billing</span>
+                </Link>
+              )}
               {session ? (
                 <div className="hidden sm:flex items-center gap-2 text-sm text-gray-600 min-w-0" title={session.user.email ?? undefined}>
                   <UserRound className="w-4 h-4 shrink-0" />

@@ -3,6 +3,7 @@ import { renewSession } from '@/lib/oidc';
 import { API_ENDPOINT, API_REGION, ConsoleSession, ConsoleUser, useConsoleStore } from '@/store/useConsoleStore';
 
 export type ProjectRole = 'owner' | 'member';
+export type SubscriptionState = 'unpaid' | 'active' | 'grace' | 'read_only' | 'suspended';
 
 export interface Project {
   id: string;
@@ -11,6 +12,61 @@ export interface Project {
   role: ProjectRole;
   created_by_me: boolean;
   created_at: string;
+  subscription: SubscriptionState;
+}
+
+export interface Plan {
+  id: string;
+  name: string;
+  price_paise: number;
+  storage_bytes: number;
+  period: { months: number } | { seconds: number };
+}
+
+export interface Subscription {
+  state: SubscriptionState;
+  plan: Plan | null;
+  period_start: string | null;
+  period_end: string | null;
+  cancel_at_period_end: boolean;
+  read_only_at: string | null;
+  suspends_at: string | null;
+  payer_is_me: boolean;
+  payer_email: string | null;
+  usage: { bytes: number; objects: number; pending_bytes: number; limit_bytes: number | null };
+}
+
+export interface BillingOverview {
+  balance_paise: number;
+  plans: Plan[];
+  /** The checkout provider, when paying by card or UPI is available. */
+  checkout: string | null;
+}
+
+export interface LedgerEntry {
+  id: string;
+  amount_paise: number;
+  balance_after_paise: number;
+  description: string;
+  project_id: string | null;
+  at: string;
+}
+
+export interface Checkout {
+  id: string;
+  amount_paise: number;
+  status: 'pending' | 'succeeded' | 'failed';
+  provider: string;
+  project_id: string | null;
+  plan_id: string | null;
+  created_at: string;
+}
+
+export interface ConfirmedCheckout {
+  checkout: Checkout;
+  balance_paise: number;
+  subscription: Subscription | null;
+  subscription_error: string | null;
 }
 
 export interface IncomingInvite {
@@ -165,6 +221,21 @@ export const consoleApi = {
   members: (id: string) => consoleRequest<Member[]>('GET', `${p(id)}/members`),
   setMemberRole: (id: string, user: string, role: ProjectRole) => consoleRequest<Member>('PATCH', `${p(id)}/members/${user}`, { role }),
   removeMember: (id: string, user: string) => consoleRequest<void>('DELETE', `${p(id)}/members/${user}`),
+
+  subscription: (id: string) => consoleRequest<Subscription>('GET', `${p(id)}/subscription`),
+  subscribe: (id: string, planId?: string) => consoleRequest<Subscription>('POST', `${p(id)}/subscription`, planId ? { plan_id: planId } : {}),
+  renew: (id: string) => consoleRequest<Subscription>('POST', `${p(id)}/subscription/renew`),
+  cancelSubscription: (id: string) => consoleRequest<Subscription>('POST', `${p(id)}/subscription/cancel`),
+  resumeSubscription: (id: string) => consoleRequest<Subscription>('POST', `${p(id)}/subscription/resume`),
+
+  billing: () => consoleRequest<BillingOverview>('GET', '/billing'),
+  ledger: () => consoleRequest<LedgerEntry[]>('GET', '/billing/ledger'),
+  redeem: (code: string) => consoleRequest<{ amount_paise: number; balance_paise: number }>('POST', '/billing/gift-codes/redeem', { code }),
+  startCheckout: (amountPaise: number, projectId?: string, planId?: string) =>
+    consoleRequest<Checkout>('POST', '/billing/checkouts', { amount_paise: amountPaise, project_id: projectId ?? null, plan_id: planId ?? null }),
+  checkout: (id: string) => consoleRequest<Checkout>('GET', `/billing/checkouts/${encodeURIComponent(id)}`),
+  confirmCheckout: (id: string, outcome: 'succeed' | 'fail') =>
+    consoleRequest<ConfirmedCheckout>('POST', `/billing/checkouts/${encodeURIComponent(id)}/confirm`, { outcome }),
 
   invites: (id: string) => consoleRequest<Invite[]>('GET', `${p(id)}/invites`),
   invite: (id: string, email: string, role: ProjectRole) => consoleRequest<Invite>('POST', `${p(id)}/invites`, { email, role }),

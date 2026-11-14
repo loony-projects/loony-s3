@@ -66,7 +66,7 @@ export function UploadPanel({ tasks, onCancel, onCancelAll, onDismiss }: {
       </div>
       <div className="max-h-64 overflow-y-auto px-4 py-2 space-y-2">
         {tasks.map((t) => (
-          <div key={t.id} title={t.error}>
+          <div key={t.id}>
             <div className="flex items-center justify-between gap-2 text-xs text-gray-600 mb-1">
               <span className="truncate">{t.name}</span>
               <span className="flex items-center gap-1 shrink-0">
@@ -86,6 +86,7 @@ export function UploadPanel({ tasks, onCancel, onCancelAll, onDismiss }: {
                 }}
               />
             </div>
+            {t.status === 'error' && t.error && <p className="mt-1 text-xs text-red-600 break-words">{t.error}</p>}
           </div>
         ))}
       </div>
