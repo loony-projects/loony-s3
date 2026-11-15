@@ -261,6 +261,8 @@ These steps change live services, so confirm each one first.
       `LS3_PUBLIC_API_URL=https://s3service.lovegood.in` and the redirect URI
       `https://s3.lovegood.in/callback` registered in loony-auth.
 - [x] Deploy the new server and confirm the admin API is still local-only.
+- [x] Run the live server from installed releases (`./loony deploy` and `rollback`), with
+      a nightly backup (`./loony backup-timer`, 03:30, 14 copies kept).
 - [ ] Run the full flow on the live site with two real accounts: sign up, create a project,
       invite, accept, create a bucket and key, upload from an SDK, remove a member, and
       confirm they lost access.

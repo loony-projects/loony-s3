@@ -71,8 +71,27 @@ cp .env.example .env      # then fill in every value
 ./loony demo              # create bucket -> put -> head -> get -> list -> delete, with curl
 ./loony ui                # the web UI's dev server, on LS3_UI_ADDR
 ./loony stop
-./loony serve             # the release build in the foreground, for a service manager
+./loony serve             # the installed release in the foreground, for a service manager
 ```
+
+### Running it live
+
+The live server runs an installed release, never the build output, so `cargo build` and
+`npm run build` can't change what's live. Releases live in `INSTALL_DIR/releases/`, with
+`current` and `previous` links; point `LS3_UI_DIR` at `INSTALL_DIR/current/ui`. The service
+(`SERVICE_NAME`, a systemd user unit) runs `./loony serve`.
+
+```bash
+./loony deploy        # build, install, dry-run on throwaway data, back up, switch, restart,
+                      # check it's healthy, and switch back on its own if it isn't
+./loony rollback      # back to the previous release
+./loony check         # dry-run the installed release with these settings
+./loony backup        # copy DATA_DIR into BACKUP_DIR, keeping BACKUP_KEEP copies
+./loony backup-timer  # install a systemd timer running `backup` daily at BACKUP_AT
+```
+
+A backup stops the service for a few seconds, so the copy is consistent. Rolling back
+doesn't undo changes a newer release made to the data: for that, restore a backup.
 
 `./loony cluster start` and `./loony cluster stop` do the same for a local multi-node
 cluster (see [cluster.md](cluster.md)).
