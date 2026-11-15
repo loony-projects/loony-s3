@@ -62,7 +62,7 @@ Do this first, because every project's apps depend on it.
 - [x] Remove the outdated "There's no API to create additional credentials yet" line from
       `docs/api-reference.md`.
 - [x] Deploy to the live server.
-- [ ] Add a Cloudflare cache rule bypassing the cache on `s3.lovegood.in`. Cloudflare turns
+- [ ] Add a Cloudflare cache rule bypassing the cache on the API's address, `s3service.lovegood.in`. Cloudflare turns
       `HEAD` into `GET` for file types it caches, which breaks the signature, and it keeps
       serving presigned links for those types after they expire.
 - [x] Send `Cache-Control: private` on object responses, so an expired link stays dead even
@@ -241,7 +241,7 @@ These steps change live services, so confirm each one first.
       never automatic.
 - [x] An admin **Add Owner** action, and a documented answer for projects whose only Owner
       deleted their Loony account.
-- [ ] Register LS3 in loony-auth: see
+- [x] Register LS3 in loony-auth: see
       [loony-auth-signin.md](loony-auth-signin.md#registering-ls3-in-loony-auth).
 - [x] Add the client ID and secret to `.env`.
 - [ ] Test against the real loony-auth on this machine: sign in, first sign-in creates the
@@ -251,11 +251,16 @@ These steps change live services, so confirm each one first.
 
 **Live steps:**
 
-- [ ] Back up the live data directory.
+- [x] Back up the live data directory.
 - [x] Let `loony-server` serve the built UI on its own address, as this machine has no other
       web server, and test the production build in a browser.
-- [ ] Host the UI at `s3-console.lovegood.in`, and add the tunnel route and DNS record.
-- [ ] Deploy the new server and confirm the admin API is still local-only.
+- [x] Move the LS3 API from `s3.lovegood.in` to `s3service.lovegood.in` (tunnel route with
+      `httpHostHeader: s3service.lovegood.in`, and its DNS record). Apps and presigned links
+      using the old name stop working, since SigV4 signs the host name.
+- [x] Host the web UI at `s3.lovegood.in` (tunnel route to `LS3_UI_ADDR`), with
+      `LS3_PUBLIC_API_URL=https://s3service.lovegood.in` and the redirect URI
+      `https://s3.lovegood.in/callback` registered in loony-auth.
+- [x] Deploy the new server and confirm the admin API is still local-only.
 - [ ] Run the full flow on the live site with two real accounts: sign up, create a project,
       invite, accept, create a bucket and key, upload from an SDK, remove a member, and
       confirm they lost access.

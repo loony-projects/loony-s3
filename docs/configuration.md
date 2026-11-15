@@ -49,7 +49,7 @@ same from the scripts' settings file, listening on `LS3_UI_ADDR` (see
 |---|---|---|---|---|
 | `LS3_UI_DIR` | — | — | no | Serves the built web UI from this directory, for deployments with no other web server. The server refuses to start if it has no `index.html`. |
 | `LS3_UI_ADDR` | — | `127.0.0.1:7354` | no | Where it's served. It needs its own address, because every path on the LS3 API could be a bucket. `./loony ui` listens here too. |
-| `LS3_PUBLIC_API_URL` | — | — | with `LS3_UI_DIR` | The LS3 API's address as browsers reach it, such as `https://s3.lovegood.in`, given to the UI in `/config.json`. Must be `https`, or `http` to this machine. |
+| `LS3_PUBLIC_API_URL` | — | — | with `LS3_UI_DIR` | The LS3 API's address as browsers reach it, such as `https://s3service.lovegood.in`, given to the UI in `/config.json`. Must be `https`, or `http` to this machine. |
 
 In a cluster, upgrade every node before turning this on: a node running an older version
 can't apply the new user records.

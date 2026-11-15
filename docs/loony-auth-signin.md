@@ -190,7 +190,7 @@ In loony-auth's web app, under **All organizations › Loony › Apps › New ap
 | Scopes | `openid profile email` |
 | Grant types | `authorization_code` (no `refresh_token`: LS3 revokes any refresh token anyway) |
 | Token endpoint auth | `client_secret_basic` |
-| Redirect URIs | `http://localhost:5180/callback` (local dev) and `https://s3-console.lovegood.in/callback` (live) |
+| Redirect URIs | `http://localhost:5180/callback` (local dev) and `https://s3.lovegood.in/callback` (live) |
 
 No separate post-logout address is needed: `/login` on those origins is allowed because it
 shares an origin with a redirect URI. Put the client ID and secret in `.env` as
