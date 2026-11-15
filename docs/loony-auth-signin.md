@@ -115,8 +115,8 @@ returns to LS3's sign-in page with its own session ended too.
 The page reads the issuer, client ID, API address and region from `/config.json` when it
 starts. loony-server serves that from its own settings (`LS3_OIDC_ISSUER`,
 `LS3_OIDC_CLIENT_ID`, `LS3_PUBLIC_API_URL`, `LS3_REGION`, `LS3_ADMIN_ADDR`), and
-`npm run dev` serves the same from the scripts' settings file, so everything is set once
-in `scripts/.env` and one build works anywhere. The client secret is never in it.
+`./loony ui` serves the same from the settings file, so everything is set once
+in `.env` and one build works anywhere. The client secret is never in it.
 
 ### LS3 gets its own Disable user action
 
@@ -193,9 +193,9 @@ In loony-auth's web app, under **All organizations › Loony › Apps › New ap
 | Redirect URIs | `http://localhost:5180/callback` (local dev) and `https://s3-console.lovegood.in/callback` (live) |
 
 No separate post-logout address is needed: `/login` on those origins is allowed because it
-shares an origin with a redirect URI. Put the client ID and secret in `scripts/.env` as
+shares an origin with a redirect URI. Put the client ID and secret in `.env` as
 `LS3_OIDC_CLIENT_ID` and `LS3_OIDC_CLIENT_SECRET`, never in a committed file. The local
-dev copy (`LS3_ENV_FILE=scripts/.env.dev`) reads them from there too.
+dev copy (`./loony --env .env.dev`) reads them from there too.
 
 ## Alternatives considered
 

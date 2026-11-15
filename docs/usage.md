@@ -56,42 +56,49 @@ all persist (verified across restarts as part of Phase 8's testing).
 
 The API is S3-compatible: SigV4-signed, XML-bodied, path-style routing
 (`http://host:port/{bucket}/{key}`). Any S3-compatible client works; the examples below
-use the bundled scripts and [rclone](https://rclone.org).
+use `./loony` and [rclone](https://rclone.org).
 
-### Bundled scripts
+### ./loony
 
-The scripts read their credentials from `scripts/.env` (gitignored) and refuse to start
-if one is missing; variables already set in your shell take precedence over the file.
-
-```bash
-cp scripts/.env.example scripts/.env      # then fill in every value
-scripts/start-standalone.sh               # builds + starts one node on BIND_ADDR
-source "$STATE_DIR/env"                   # ENDPOINT/REGION/ACCESS_KEY/SECRET_KEY + rclone remote
-scripts/curl-demo.sh                      # create bucket -> put -> head -> get -> list -> delete
-scripts/stop-standalone.sh
-```
-
-`scripts/start-cluster.sh`/`stop-cluster.sh` do the same for a local multi-node cluster
-(see [cluster.md](cluster.md)).
-
-The scripts have no built-in defaults: every port, folder and setting comes from the
-settings file, and any `LS3_*` line in it is passed to the server as is. To run a second
-instance beside the first, such as a dev copy next to a live server, put its settings in
-another file with different ports and folders, and name it with `LS3_ENV_FILE`:
+`./loony` at the top of the repository runs everything: `./loony help` lists its commands.
+It reads every value from `.env` (gitignored) and refuses to start if one it needs is
+missing; variables already set in your shell take precedence over the file.
 
 ```bash
-cp scripts/.env.example scripts/.env.dev  # different BIND_ADDR, DATA_DIR, STATE_DIR, LS3_ADMIN_ADDR
-LS3_ENV_FILE=scripts/.env.dev scripts/start-standalone.sh
-LS3_ENV_FILE=scripts/.env.dev scripts/stop-standalone.sh
+cp .env.example .env      # then fill in every value
+./loony start             # builds + starts one node on BIND_ADDR, in the background
+./loony status
+./loony demo              # create bucket -> put -> head -> get -> list -> delete, with curl
+./loony ui                # the web UI's dev server, on LS3_UI_ADDR
+./loony stop
+./loony serve             # the release build in the foreground, for a service manager
 ```
 
-`curl-demo.sh` signs every request itself (pure bash + `openssl`, no SDK), so it doubles
+`./loony cluster start` and `./loony cluster stop` do the same for a local multi-node
+cluster (see [cluster.md](cluster.md)).
+
+There are no built-in defaults: every port, folder and setting comes from the settings
+file, and any `LS3_*` line in it is passed to the server as is. To run a second instance
+beside the first, such as a dev copy next to a live server, put its settings in another
+file with different ports and folders, and name it with `--env`:
+
+```bash
+cp .env.example .env.dev  # different BIND_ADDR, DATA_DIR, STATE_DIR, LS3_ADMIN_ADDR, LS3_UI_ADDR
+./loony --env .env.dev start
+./loony --env .env.dev ui
+./loony --env .env.dev stop
+```
+
+That file takes any `LS3_OIDC_*` line it doesn't set itself from `.env`, and nothing else,
+so the sign-in secret is kept in one place.
+
+`./loony demo` signs every request itself (pure bash + `openssl`, no SDK), so it doubles
 as a readable reference for the exact signing steps this server verifies — copy its
 `ls3_request` function to script your own calls.
 
 ### rclone
 
-The env file written by the start scripts also defines an rclone remote named `loony:`
+The env file `./loony start` writes (`$STATE_DIR/env`) defines an rclone remote named `loony:`
 purely through `RCLONE_CONFIG_LOONY_*` variables, so no `rclone.conf` is needed:
 
 ```bash
@@ -169,15 +176,15 @@ itself, directly from the browser — there's no backend-for-frontend or proxy i
 the LS3 API.
 
 The UI has no settings of its own. It reads them from `/config.json` when it starts, and
-`npm run dev` serves that from the same settings file as the scripts: `scripts/.env`, or
-the one named by `LS3_ENV_FILE`. It needs `REGION`, `LS3_UI_ADDR` (where the dev server
+`./loony ui` (which runs `npm run dev`) serves that from the same settings file as the
+server: `.env`, or the one given with `--env`. It needs `REGION`, `LS3_UI_ADDR` (where the dev server
 listens), `LS3_PUBLIC_API_URL` (the LS3 API, as the browser reaches it) and
 `LS3_ADMIN_ADDR`, plus the `LS3_OIDC_*` settings for signing in with Loony.
 
 ```bash
 cd frontend
 npm install
-LS3_ENV_FILE=scripts/.env.dev npm run dev   # or plain `npm run dev` for scripts/.env
+./loony --env .env.dev ui   # or plain `./loony ui` for .env
 # open http://localhost:<port in LS3_UI_ADDR>
 ```
 

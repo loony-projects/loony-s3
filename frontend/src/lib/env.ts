@@ -1,6 +1,6 @@
 // The UI's settings come from the server at startup (`/config.json`), not from the build,
-// so every setting lives in the server's configuration (scripts/.env) and one build works
-// anywhere. Under `npm run dev`, Vite serves the same file from the scripts' settings.
+// so every setting lives in the server's configuration (./.env) and one build works
+// anywhere. Under `./loony ui`, Vite serves the same from the same settings file.
 //
 // These are only set once `loadSettings` has finished. main.tsx waits for it before
 // importing the rest of the app, so code elsewhere can read them as plain constants.

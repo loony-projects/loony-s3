@@ -28,7 +28,7 @@ When it's off, the [console API](api-reference.md#console-api) isn't served at a
 |---|---|---|---|---|
 | `LS3_OIDC_ISSUER` | — | — | to enable | The identity provider's public URL, exactly as it appears in its tokens: `https://auth.lovegood.in` for loony-auth. Tokens are always checked against this, never the internal URL. Must be `https`, or `http` to this machine. |
 | `LS3_OIDC_CLIENT_ID` | — | — | to enable | This server's client ID at the identity provider. |
-| `LS3_OIDC_CLIENT_SECRET` | — | — | to enable | The matching secret. Keep it in `scripts/.env` only, out of version control. |
+| `LS3_OIDC_CLIENT_SECRET` | — | — | to enable | The matching secret. Keep it in `.env` only, out of version control. |
 | `LS3_OIDC_REDIRECT_URIS` | — | — | to enable | Comma-separated. Must exactly match what's registered at the identity provider. Their origins are also the only web pages allowed to call the console API. |
 | `LS3_OIDC_INTERNAL_URL` | — | the issuer | no | Where this server reaches the identity provider for server-to-server calls (code exchange, revoking, JWKS), if not through its public URL: `http://127.0.0.1:2001` when loony-auth runs on the same machine. |
 | `LS3_CONSOLE_SESSION_TTL_SECS` | — | `28800` (8 hours) | no | How long a session key lasts, up to 7 days. |
@@ -41,14 +41,14 @@ loony-auth: see [loony-auth-signin.md](loony-auth-signin.md#registering-ls3-in-l
 
 The UI takes no settings when it's built. When it starts, it reads `/config.json` from its
 own address: the issuer and client ID above, `LS3_PUBLIC_API_URL`, the region and the admin
-address. loony-server serves that file when it hosts the UI, and `npm run dev` serves the
+address. loony-server serves that file when it hosts the UI, and `./loony ui` serves the
 same from the scripts' settings file, listening on `LS3_UI_ADDR` (see
 [usage.md](usage.md#run-the-web-ui)).
 
 | Env var | CLI flag | Default | Required | Notes |
 |---|---|---|---|---|
 | `LS3_UI_DIR` | — | — | no | Serves the built web UI from this directory, for deployments with no other web server. The server refuses to start if it has no `index.html`. |
-| `LS3_UI_ADDR` | — | `127.0.0.1:7354` | no | Where it's served. It needs its own address, because every path on the LS3 API could be a bucket. `npm run dev` listens here too. |
+| `LS3_UI_ADDR` | — | `127.0.0.1:7354` | no | Where it's served. It needs its own address, because every path on the LS3 API could be a bucket. `./loony ui` listens here too. |
 | `LS3_PUBLIC_API_URL` | — | — | with `LS3_UI_DIR` | The LS3 API's address as browsers reach it, such as `https://s3.lovegood.in`, given to the UI in `/config.json`. Must be `https`, or `http` to this machine. |
 
 In a cluster, upgrade every node before turning this on: a node running an older version

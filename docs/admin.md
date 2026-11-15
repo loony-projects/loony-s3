@@ -14,9 +14,7 @@ tunnel or proxy to it: it has no rate limiting and is designed to be local only.
 To use the panel, run the UI on the same machine as the server:
 
 ```bash
-cd frontend
-npm install
-npm run dev     # then open the http://localhost URL it prints
+./loony ui      # then open http://localhost:<port in LS3_UI_ADDR>
 ```
 
 and sign in with the root access key and secret. The UI talks to the admin API at
@@ -32,7 +30,7 @@ you sign out, so sign out when you're done with the root key on a shared machine
 Requests are SigV4-signed exactly like LS3 requests (with the actual body hash, not
 `UNSIGNED-PAYLOAD`), by a key with the admin flag. Presigned URLs aren't accepted. The
 root credential (`LS3_ROOT_ACCESS_KEY`/`LS3_ROOT_SECRET_KEY`, or `ACCESS_KEY`/`SECRET_KEY`
-in `scripts/.env`) gets the flag each time the server starts, and it's the only way to get
+in `.env`) gets the flag each time the server starts, and it's the only way to get
 it: keys created in the panel are never admins.
 
 If you change the root access key, the old one keeps working and stays an admin. Disable
@@ -122,7 +120,7 @@ it have been deleted. Metadata voters, which today means the bootstrap node, can
 drained or removed, since voter changes aren't implemented.
 
 Changes must go through the metadata leader's admin API, which is node 1's in a cluster
-started by `scripts/start-cluster.sh` (ports go up from 7253, one per node). Other nodes
+started by `./loony cluster start` (admin ports go up from `CLUSTER_ADMIN_PORT`, one per node). Other nodes
 answer read requests but refuse changes.
 
 **Audit log**: admin changes, project changes made by signed-in users, billing (gift codes,

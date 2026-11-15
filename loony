@@ -1,0 +1,611 @@
+#!/usr/bin/env bash
+# loony: runs loony-server and the web UI for development and on this machine.
+#
+#   ./loony [--env FILE] <command> [args]
+#
+# Commands:
+#   serve            Run the release server in the foreground, for a service manager.
+#   start            Build and start one server in the background (debug build).
+#   stop             Stop the server started by `start`.
+#   restart          stop, then start.
+#   status           Say whether that server is running.
+#   cluster start    Start a local multi-node cluster in the background.
+#   cluster stop     Stop it.
+#   demo             Walk a server through bucket and object calls with plain curl.
+#   ui               Run the web UI's dev server (npm run dev).
+#   help             Show this.
+#
+# Every value comes from a settings file: ./.env by default, or the one given with
+# --env FILE (or LS3_ENV_FILE), for example a dev copy beside the live server:
+#   ./loony --env .env.dev start
+# See .env.example for every setting. Variables already set in the shell win.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+MAIN_ENV="$REPO_ROOT/.env"
+
+usage() {
+  sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+}
+
+die() {
+  echo "loony: $*" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+# A relative path is looked for from here first, then from the repository.
+resolve_env_file() {
+  local path="$1"
+  if [[ "$path" == /* || -f "$path" ]]; then
+    realpath -m "$path"
+  else
+    realpath -m "$REPO_ROOT/$path"
+  fi
+}
+
+# Usage: read_env_file <file> <prefix>. Reads KEY=VALUE lines whose key starts with
+# <prefix> into shell variables. Parsed rather than sourced, so a secret containing `$`,
+# `#` or backticks is taken literally, and one matching pair of surrounding quotes is
+# stripped. Variables already set win, so one-off overrides still work.
+read_env_file() {
+  local file="$1" prefix="$2"
+  [[ -f "$file" ]] || return 0
+
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    [[ "$key" == "$prefix"* ]] || continue
+    if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+    [[ -n "${!key:-}" ]] || printf -v "$key" '%s' "$value"
+  done <"$file"
+}
+
+load_settings() {
+  [[ -f "$DOTENV_FILE" ]] || die "$DOTENV_FILE doesn't exist. Create it from the template: cp $REPO_ROOT/.env.example $DOTENV_FILE"
+  read_env_file "$DOTENV_FILE" ''
+  # Another settings file shares only sign-in with ./.env, so the client secret lives in
+  # one place and a dev copy can never pick up the live server's ports or data.
+  if [[ "$DOTENV_FILE" != "$(realpath -m "$MAIN_ENV")" ]]; then
+    read_env_file "$MAIN_ENV" 'LS3_OIDC_'
+  fi
+}
+
+# Exports every LS3_* setting, from the settings file or the environment, so the server
+# sees all of them (sign-in, billing, the UI, the admin address...) without listing them.
+export_ls3_settings() {
+  local name
+  for name in $(compgen -v LS3_); do
+    [[ "$name" == LS3_ENV_FILE || -z "${!name}" ]] || export "${name?}"
+  done
+}
+
+# Exits with a pointer to the fix if any of the named settings is unset or empty.
+require_env() {
+  local name missing=()
+  for name in "$@"; do
+    [[ -n "${!name:-}" ]] || missing+=("$name")
+  done
+  [[ ${#missing[@]} -eq 0 ]] || die "missing setting(s): ${missing[*]}. Set them in $DOTENV_FILE (see .env.example)."
+}
+
+# Writes the sourceable env file for `demo` and rclone, readable only by this user since
+# it holds the secret key. Usage: write_client_env <path> <endpoint>
+write_client_env() {
+  local path="$1" endpoint="$2"
+  (
+    umask 077
+    rm -f "$path"
+    cat >"$path" <<EOF
+export ENDPOINT="$endpoint"
+export REGION="$REGION"
+export ACCESS_KEY=$(printf '%q' "$ACCESS_KEY")
+export SECRET_KEY=$(printf '%q' "$SECRET_KEY")
+# rclone remote "loony:" -- configured entirely from env, no rclone.conf needed.
+export RCLONE_CONFIG_LOONY_TYPE=s3
+export RCLONE_CONFIG_LOONY_PROVIDER=Other
+export RCLONE_CONFIG_LOONY_LIST_VERSION=2
+export RCLONE_CONFIG_LOONY_ENDPOINT="$endpoint"
+export RCLONE_CONFIG_LOONY_REGION="$REGION"
+export RCLONE_CONFIG_LOONY_ACCESS_KEY_ID=$(printf '%q' "$ACCESS_KEY")
+export RCLONE_CONFIG_LOONY_SECRET_ACCESS_KEY=$(printf '%q' "$SECRET_KEY")
+EOF
+  )
+}
+
+# Stops the process in a pidfile, gently first. Usage: stop_pidfile <file> <name>
+stop_pidfile() {
+  local pid_file="$1" name="$2" pid
+  pid="$(cat "$pid_file")"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "$name: not running (stale pidfile for pid $pid)"
+    rm -f "$pid_file"
+    return 0
+  fi
+  echo "stopping $name (pid $pid)..."
+  kill "$pid"
+  for _ in $(seq 1 20); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "$name still running after a graceful stop, forcing..." >&2
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+}
+
+# Bash's /dev/tcp pseudo-device: no curl or nc needed just to see a port accept.
+wait_for_port() {
+  local host="$1" port="$2"
+  for _ in $(seq 1 50); do
+    if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+build_debug() {
+  echo "building loony-server..."
+  (cd "$REPO_ROOT" && cargo build --bin loony-server 2>&1 | tail -5)
+}
+
+# ---------------------------------------------------------------------------
+# serve: the release server in the foreground, for a service manager to supervise.
+# Build it first: cargo build --release --bin loony-server
+# ---------------------------------------------------------------------------
+
+cmd_serve() {
+  load_settings
+  require_env ACCESS_KEY SECRET_KEY DATA_DIR BIND_ADDR REGION
+  export_ls3_settings
+  export LS3_MODE=standalone
+  export LS3_DATA_DIR="$DATA_DIR"
+  export LS3_BIND_ADDR="$BIND_ADDR"
+  export LS3_REGION="$REGION"
+  export LS3_ROOT_ACCESS_KEY="$ACCESS_KEY"
+  export LS3_ROOT_SECRET_KEY="$SECRET_KEY"
+  exec "$REPO_ROOT/target/release/loony-server" --mode standalone
+}
+
+# ---------------------------------------------------------------------------
+# start / stop / status: one server in the background. Its pidfile, log and client env
+# file live in STATE_DIR, not the repository.
+# ---------------------------------------------------------------------------
+
+cmd_start() {
+  load_settings
+  require_env ACCESS_KEY SECRET_KEY DATA_DIR BIND_ADDR REGION STATE_DIR
+  export_ls3_settings
+  local pid_file="$STATE_DIR/loony-server.pid" log_file="$STATE_DIR/loony-server.log"
+  local client_env="$STATE_DIR/env"
+
+  if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+    echo "already running (pid $(cat "$pid_file")) -- see $log_file" >&2
+    return 0
+  fi
+  mkdir -p "$STATE_DIR" "$DATA_DIR"
+  build_debug
+
+  echo "starting loony-server (standalone) on http://$BIND_ADDR, data dir $DATA_DIR"
+  LS3_MODE=standalone \
+  LS3_DATA_DIR="$DATA_DIR" \
+  LS3_BIND_ADDR="$BIND_ADDR" \
+  LS3_REGION="$REGION" \
+  LS3_ROOT_ACCESS_KEY="$ACCESS_KEY" \
+  LS3_ROOT_SECRET_KEY="$SECRET_KEY" \
+  nohup "$REPO_ROOT/target/debug/loony-server" --mode standalone >"$log_file" 2>&1 &
+  echo $! >"$pid_file"
+
+  # Give it a moment to come up or fail fast, so a port already in use is reported
+  # instead of a false "started".
+  sleep 1
+  if ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+    tail -20 "$log_file" >&2
+    rm -f "$pid_file"
+    die "loony-server exited immediately -- see $log_file"
+  fi
+
+  write_client_env "$client_env" "http://$BIND_ADDR"
+  echo "started (pid $(cat "$pid_file"))"
+  echo "  endpoint:    http://$BIND_ADDR"
+  echo "  log:         $log_file"
+  [[ -z "${LS3_ADMIN_ADDR:-}" ]] || echo "  admin API:   http://$LS3_ADMIN_ADDR"
+  [[ -z "${LS3_OIDC_ISSUER:-}" ]] || echo "  sign-in:     $LS3_OIDC_ISSUER"
+  [[ -z "${LS3_BILLING_MODE:-}" ]] || echo "  billing:     $LS3_BILLING_MODE"
+  echo
+  echo "curl demo: ./loony${ENV_ARG} demo"
+  echo "rclone:    source $client_env && rclone lsd loony:"
+}
+
+cmd_stop() {
+  load_settings
+  require_env STATE_DIR
+  local pid_file="$STATE_DIR/loony-server.pid"
+  if [[ ! -f "$pid_file" ]]; then
+    echo "not running (no pidfile at $pid_file)"
+    return 0
+  fi
+  stop_pidfile "$pid_file" loony-server
+  echo "stopped"
+}
+
+cmd_status() {
+  load_settings
+  require_env STATE_DIR
+  local pid_file="$STATE_DIR/loony-server.pid"
+  if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+    echo "running (pid $(cat "$pid_file")) on http://${BIND_ADDR:-?} -- log $STATE_DIR/loony-server.log"
+  else
+    echo "not running"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# cluster start / stop: node 1 bootstraps, every other node joins through it. See
+# docs/cluster.md for what cluster mode does and doesn't do yet. Node n uses each
+# CLUSTER_*_PORT plus n-1, and its data in DATA_ROOT/node<n> is wiped on every start.
+# ---------------------------------------------------------------------------
+
+cmd_cluster_start() {
+  load_settings
+  require_env ACCESS_KEY SECRET_KEY CLUSTER_TOKEN CLUSTER_SIZE CLUSTER_ID REGION DATA_ROOT \
+    CLUSTER_STATE_DIR CLUSTER_HOST CLUSTER_API_PORT CLUSTER_ADMIN_PORT CLUSTER_RPC_PORT
+  [[ "$CLUSTER_SIZE" -ge 1 ]] || die "CLUSTER_SIZE must be at least 1"
+  local state_dir="$CLUSTER_STATE_DIR" bin="$REPO_ROOT/target/debug/loony-server"
+
+  local pf
+  for pf in "$state_dir"/node*.pid; do
+    [[ -f "$pf" ]] || continue
+    if kill -0 "$(cat "$pf")" 2>/dev/null; then
+      echo "already running (pid $(cat "$pf"), see $state_dir) -- run ./loony cluster stop first" >&2
+      return 0
+    fi
+  done
+  mkdir -p "$state_dir"
+  build_debug
+
+  local -a bind_addrs cluster_addrs
+  local i idx bind_addr cluster_addr admin_addr cluster_port data_dir log_file pid_file
+  for i in $(seq 1 "$CLUSTER_SIZE"); do
+    idx=$((i - 1))
+    cluster_port=$((CLUSTER_RPC_PORT + idx))
+    bind_addr="$CLUSTER_HOST:$((CLUSTER_API_PORT + idx))"
+    admin_addr="$CLUSTER_HOST:$((CLUSTER_ADMIN_PORT + idx))"
+    cluster_addr="$CLUSTER_HOST:$cluster_port"
+    bind_addrs[i]="$bind_addr"
+    cluster_addrs[i]="$cluster_addr"
+    data_dir="$DATA_ROOT/node$i"
+    log_file="$state_dir/node$i.log"
+    pid_file="$state_dir/node$i.pid"
+    rm -rf "$data_dir"
+    mkdir -p "$data_dir"
+
+    if [[ "$i" -eq 1 ]]; then
+      echo "starting node 1 (bootstrap) -- api $bind_addr, cluster $cluster_addr"
+      LS3_MODE=cluster LS3_CLUSTER_TOKEN="$CLUSTER_TOKEN" LS3_CLUSTER_ID="$CLUSTER_ID" \
+        LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_ADMIN_ADDR="$admin_addr" LS3_REGION="$REGION" \
+        LS3_CLUSTER_ADDR="$cluster_addr" LS3_ADVERTISE_ADDR="$cluster_addr" \
+        LS3_ROOT_ACCESS_KEY="$ACCESS_KEY" LS3_ROOT_SECRET_KEY="$SECRET_KEY" \
+        nohup "$bin" --mode cluster --bootstrap >"$log_file" 2>&1 &
+    else
+      echo "starting node $i (join via ${cluster_addrs[1]}) -- api $bind_addr, cluster $cluster_addr"
+      LS3_MODE=cluster LS3_CLUSTER_TOKEN="$CLUSTER_TOKEN" \
+        LS3_DATA_DIR="$data_dir" LS3_BIND_ADDR="$bind_addr" LS3_ADMIN_ADDR="$admin_addr" LS3_REGION="$REGION" \
+        LS3_CLUSTER_ADDR="$cluster_addr" LS3_ADVERTISE_ADDR="$cluster_addr" \
+        nohup "$bin" --mode cluster --join "${cluster_addrs[1]}" >"$log_file" 2>&1 &
+    fi
+    echo $! >"$pid_file"
+    wait_for_port "$CLUSTER_HOST" "$cluster_port" || die "node $i never came up -- see $log_file"
+    if ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+      tail -20 "$log_file" >&2
+      die "node $i exited immediately -- see $log_file"
+    fi
+  done
+
+  # Clients, and the rclone remote, point at node 1.
+  write_client_env "$state_dir/env" "http://${bind_addrs[1]}"
+  echo
+  echo "cluster up: $CLUSTER_SIZE node(s), cluster id '$CLUSTER_ID'"
+  for i in $(seq 1 "$CLUSTER_SIZE"); do
+    echo "  node $i: api http://${bind_addrs[i]}  cluster ${cluster_addrs[i]}  pid $(cat "$state_dir/node$i.pid")  log $state_dir/node$i.log"
+  done
+  echo
+  echo "Only node 1 (the bootstrap node) is the metadata leader today -- writes must go"
+  echo "through it; reads and already-placed shard fetches work against any node."
+  echo
+  echo "rclone: source $state_dir/env && rclone lsd loony:"
+}
+
+cmd_cluster_stop() {
+  load_settings
+  require_env CLUSTER_STATE_DIR
+  local pf found=0
+  for pf in "$CLUSTER_STATE_DIR"/node*.pid; do
+    [[ -f "$pf" ]] || continue
+    found=1
+    stop_pidfile "$pf" "$(basename "$pf" .pid)"
+  done
+  if [[ "$found" -eq 0 ]]; then
+    echo "not running (no pidfiles in $CLUSTER_STATE_DIR)"
+  else
+    echo "stopped"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# demo: drives the LS3 API with plain curl, no CLI or SDK. Every request needs a SigV4
+# signature, so this signs them itself in bash and openssl, then walks through
+# create-bucket -> put -> head -> get -> list -> delete -> delete-bucket. Needs bash, curl
+# and openssl; ASCII bucket and key names only.
+#
+# Uses ENDPOINT if set, otherwise http://BIND_ADDR. BUCKET and OBJECT_KEY name the demo's
+# own bucket and file.
+# ---------------------------------------------------------------------------
+
+# Wire-protocol literals fixed by the SigV4 spec -- every standard client signs with
+# these exact bytes, so they can't be renamed without breaking compatibility. This is
+# the only place they're spelled out (mirrors crates/auth/src/canonical.rs).
+SIGNING_ALGORITHM="AWS4-HMAC-SHA256"
+SIGNING_KEY_PREFIX="AWS4"
+SCOPE_TERMINATOR="aws4_request"
+SERVICE="s3"
+
+
+# ---------------------------------------------------------------------------
+# SigV4 primitives (mirrors crates/auth/src/canonical.rs and verify.rs exactly --
+# see those for the reference implementation this is signing against).
+# ---------------------------------------------------------------------------
+
+sha256_hex() {
+  # Hashes stdin.
+  openssl dgst -sha256 -r | awk '{print $1}'
+}
+
+hmac_sha256_hex() {
+  # $1: hex-encoded key. Hashes stdin, returns hex digest (itself usable as the next
+  # step's hex key -- HMAC chaining never needs to go back through ASCII).
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:$1" -r | awk '{print $1}'
+}
+
+str_to_hex() {
+  printf '%s' "$1" | od -An -tx1 | tr -d ' \n'
+}
+
+# SigV4's URI-encode: unreserved chars (A-Za-z0-9-._~) pass through, everything else
+# becomes %XX (uppercase hex); '/' passes through unless $2=true. ASCII-only.
+uri_encode() {
+  local input="$1" encode_slash="${2:-false}" out="" c i len
+  len=${#input}
+  for (( i = 0; i < len; i++ )); do
+    c="${input:i:1}"
+    if [[ "$c" =~ [A-Za-z0-9._~-] ]]; then
+      out+="$c"
+    elif [[ "$c" == "/" && "$encode_slash" == "false" ]]; then
+      out+="$c"
+    else
+      printf -v hex '%%%02X' "'$c"
+      out+="$hex"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+canonical_query_string() {
+  # $1: raw "k=v&k2=v2" (already unencoded/simple in this script's own use) -- sorts
+  # by key the same way canonical_query_string() in canonical.rs does.
+  local raw="$1"
+  [[ -z "$raw" ]] && return 0
+  local IFS='&'
+  local -a pairs=($raw)
+  IFS=$'\n' pairs=($(sort <<<"${pairs[*]}"))
+  local out=""
+  for p in "${pairs[@]}"; do
+    [[ -n "$out" ]] && out+="&"
+    out+="$p"
+  done
+  printf '%s' "$out"
+}
+
+# Prints a fully-signed curl invocation's worth of headers for one request, then runs
+# it. $1 method, $2 path (already the canonical, slash-preserving path this server
+# expects, e.g. "/bucket/key"), $3 raw query string (no leading '?', may be empty),
+# $4 body file (may be empty for no body). Extra curl args follow as $5+.
+ls3_request() {
+  local method="$1" path="$2" query="$3" body_file="${4:-}"
+  shift 4 || shift $#
+  local extra_curl_args=("$@")
+
+  local amz_date date_stamp payload_hash
+  amz_date="$(date -u +"%Y%m%dT%H%M%SZ")"
+  date_stamp="${amz_date:0:8}"
+
+  if [[ -n "$body_file" ]]; then
+    payload_hash="$(sha256_hex <"$body_file")"
+  else
+    payload_hash="$(printf '' | sha256_hex)"
+  fi
+
+  local canonical_uri
+  canonical_uri="$(uri_encode "$path" false)"
+  [[ -z "$canonical_uri" ]] && canonical_uri="/"
+
+  local canonical_qs
+  canonical_qs="$(canonical_query_string "$query")"
+
+  local signed_headers="host;x-amz-content-sha256;x-amz-date"
+  local canonical_headers
+  printf -v canonical_headers 'host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n' \
+    "$HOST" "$payload_hash" "$amz_date"
+
+  local canonical_request
+  printf -v canonical_request '%s\n%s\n%s\n%s\n%s\n%s' \
+    "$method" "$canonical_uri" "$canonical_qs" "$canonical_headers" "$signed_headers" "$payload_hash"
+
+  local hashed_canonical_request
+  hashed_canonical_request="$(printf '%s' "$canonical_request" | sha256_hex)"
+
+  local credential_scope="$date_stamp/$REGION/$SERVICE/$SCOPE_TERMINATOR"
+  local string_to_sign
+  printf -v string_to_sign '%s\n%s\n%s\n%s' \
+    "$SIGNING_ALGORITHM" "$amz_date" "$credential_scope" "$hashed_canonical_request"
+
+  local k_secret_hex k_date k_region k_service k_signing signature
+  k_secret_hex="$(str_to_hex "$SIGNING_KEY_PREFIX$SECRET_KEY")"
+  k_date="$(printf '%s' "$date_stamp" | hmac_sha256_hex "$k_secret_hex")"
+  k_region="$(printf '%s' "$REGION" | hmac_sha256_hex "$k_date")"
+  k_service="$(printf '%s' "$SERVICE" | hmac_sha256_hex "$k_region")"
+  k_signing="$(printf '%s' "$SCOPE_TERMINATOR" | hmac_sha256_hex "$k_service")"
+  signature="$(printf '%s' "$string_to_sign" | hmac_sha256_hex "$k_signing")"
+
+  local authorization="$SIGNING_ALGORITHM Credential=$ACCESS_KEY/$credential_scope, SignedHeaders=$signed_headers, Signature=$signature"
+
+  local url="$ENDPOINT$path"
+  [[ -n "$query" ]] && url="$url?$query"
+
+  echo "--- $method $path${query:+?$query}"
+
+  local -a curl_args=(
+    -sS -D "$DEMO_HEADERS" -w '\nHTTP %{http_code}\n'
+    -H "Host: $HOST"
+    -H "x-amz-date: $amz_date"
+    -H "x-amz-content-sha256: $payload_hash"
+    -H "Authorization: $authorization"
+  )
+  if [[ "$method" == "HEAD" ]]; then
+    # `-X HEAD` alone only changes the request line's method text -- it doesn't tell
+    # curl to skip reading a body, so it hangs waiting for bytes a HEAD response
+    # correctly never sends. `--head`/`-I` is the flag that actually does that.
+    curl_args+=(--head)
+  else
+    curl_args+=(-X "$method")
+  fi
+  [[ -n "$body_file" ]] && curl_args+=(--data-binary "@$body_file")
+  curl_args+=("${extra_curl_args[@]}")
+  curl_args+=("$url")
+
+  curl "${curl_args[@]}"
+  echo "  (response headers in $DEMO_HEADERS)"
+  echo
+}
+
+
+cmd_demo() {
+  load_settings
+  require_env ACCESS_KEY SECRET_KEY REGION
+  if [[ -z "${ENDPOINT:-}" ]]; then
+    require_env BIND_ADDR
+    ENDPOINT="http://$BIND_ADDR"
+  fi
+  local bucket="${BUCKET:-curl-demo-bucket}" object_key="${OBJECT_KEY:-hello.txt}"
+  HOST="${ENDPOINT#http://}"
+  HOST="${HOST#https://}"
+
+  local body_file downloaded_file
+  body_file="$(mktemp)"
+  downloaded_file="$(mktemp)"
+  DEMO_HEADERS="$(mktemp)"
+  trap 'rm -f "$body_file" "$downloaded_file" "$DEMO_HEADERS"' EXIT
+
+  echo "endpoint: $ENDPOINT   region: $REGION   access key: $ACCESS_KEY"
+  echo
+
+  echo "== CreateBucket =="
+  ls3_request PUT "/$bucket" ""
+
+  echo "== HeadBucket =="
+  ls3_request HEAD "/$bucket" ""
+
+  echo "== PutObject =="
+  printf 'hello from ./loony demo, %s\n' "$(date -u)" >"$body_file"
+  ls3_request PUT "/$bucket/$object_key" "" "$body_file" -H "Content-Type: text/plain"
+
+  echo "== HeadObject =="
+  ls3_request HEAD "/$bucket/$object_key" ""
+
+  echo "== GetObject =="
+  ls3_request GET "/$bucket/$object_key" "" "" -o "$downloaded_file"
+  if diff -q "$body_file" "$downloaded_file" >/dev/null; then
+    echo "  downloaded body matches what was uploaded"
+  else
+    echo "  MISMATCH -- uploaded and downloaded bodies differ" >&2
+  fi
+  echo
+
+  echo "== ListObjectsV2 =="
+  ls3_request GET "/$bucket" "list-type=2"
+
+  echo "== DeleteObject =="
+  ls3_request DELETE "/$bucket/$object_key" ""
+
+  echo "== DeleteBucket =="
+  ls3_request DELETE "/$bucket" ""
+
+  echo "done"
+}
+
+# ---------------------------------------------------------------------------
+# ui: the web UI's dev server. It reads the same settings file and listens on its
+# LS3_UI_ADDR; see frontend/vite.config.ts.
+# ---------------------------------------------------------------------------
+
+cmd_ui() {
+  [[ -f "$DOTENV_FILE" ]] || die "$DOTENV_FILE doesn't exist. Create it from the template: cp $REPO_ROOT/.env.example $DOTENV_FILE"
+  cd "$REPO_ROOT/frontend"
+  [[ -d node_modules ]] || npm install
+  LS3_ENV_FILE="$DOTENV_FILE" exec npm run dev
+}
+
+# ---------------------------------------------------------------------------
+
+ENV_ARG=""
+DOTENV_FILE="${LS3_ENV_FILE:-$MAIN_ENV}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env)
+      [[ $# -ge 2 ]] || die "--env needs a file"
+      DOTENV_FILE="$2"
+      ENV_ARG=" --env $2"
+      shift 2
+      ;;
+    --env=*)
+      DOTENV_FILE="${1#--env=}"
+      ENV_ARG=" --env ${1#--env=}"
+      shift
+      ;;
+    *) break ;;
+  esac
+done
+DOTENV_FILE="$(resolve_env_file "$DOTENV_FILE")"
+
+command="${1:-help}"
+shift || true
+case "$command" in
+  serve) cmd_serve ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  status) cmd_status ;;
+  restart) cmd_stop && cmd_start ;;
+  cluster)
+    case "${1:-}" in
+      start) cmd_cluster_start ;;
+      stop) cmd_cluster_stop ;;
+      *) die "usage: ./loony cluster start|stop" ;;
+    esac
+    ;;
+  demo) cmd_demo ;;
+  ui) cmd_ui ;;
+  help | -h | --help) usage ;;
+  *) usage >&2; die "unknown command: $command" ;;
+esac

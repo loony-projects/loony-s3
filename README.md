@@ -104,8 +104,8 @@ concurrent uploads. A project whose renewal fails gets 7 days' grace, then becom
 read-only, then is suspended 30 days later. See
 [`docs/usage.md`](docs/usage.md#plans-and-billing).
 
-**Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (the bundled
-scripts, rclone, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env
+**Docs:** [`docs/usage.md`](docs/usage.md) for how to build, run, and talk to it (the
+`./loony` command, rclone, the web UI); [`docs/configuration.md`](docs/configuration.md) for every env
 var/flag; [`docs/api-reference.md`](docs/api-reference.md) for the exact LS3 API surface;
 [`docs/cluster.md`](docs/cluster.md) for running more than one node. Read
 [`docs/architecture.md`](docs/architecture.md) before writing or reviewing any code in

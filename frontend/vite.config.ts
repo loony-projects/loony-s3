@@ -3,12 +3,13 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 
-// Every setting comes from the scripts' settings file, as for the server: scripts/.env, or
-// the file named by LS3_ENV_FILE. See scripts/.env.example and docs/configuration.md.
+// Every setting comes from the same settings file as the server: ./.env, or the file named
+// by LS3_ENV_FILE (`./loony --env FILE ui` sets it). See .env.example and
+// docs/configuration.md.
 const repoRoot = path.resolve(__dirname, '..');
-const mainFile = path.join(repoRoot, 'scripts/.env');
+const mainFile = path.join(repoRoot, '.env');
 
-/** The same rules as scripts/env.sh: KEY=VALUE, no inline comments, and one matching pair
+/** The same rules as ./loony: KEY=VALUE, no inline comments, and one matching pair
  * of surrounding quotes stripped. */
 function parseEnvFile(file: string): Record<string, string> {
   const values: Record<string, string> = {};
@@ -23,7 +24,7 @@ function parseEnvFile(file: string): Record<string, string> {
 
 function loadSettings(): Record<string, string> {
   const chosen = process.env.LS3_ENV_FILE ? path.resolve(repoRoot, process.env.LS3_ENV_FILE) : mainFile;
-  if (!fs.existsSync(chosen)) throw new Error(`${chosen} doesn't exist. Create it from scripts/.env.example.`);
+  if (!fs.existsSync(chosen)) throw new Error(`${chosen} doesn't exist. Create it from .env.example.`);
   const values = parseEnvFile(chosen);
   // A second instance shares only sign-in with the main file, so the client secret lives in
   // one place and a dev copy can never pick up the live server's ports or data.
@@ -42,7 +43,7 @@ function loadSettings(): Record<string, string> {
 
 function required(settings: Record<string, string>, name: string): string {
   const value = settings[name]?.trim();
-  if (!value) throw new Error(`${name} isn't set. Add it to the scripts' settings file (see scripts/.env.example).`);
+  if (!value) throw new Error(`${name} isn't set. Add it to the settings file (see .env.example).`);
   return value;
 }
 

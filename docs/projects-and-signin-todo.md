@@ -93,7 +93,7 @@ Do this first, because every project's apps depend on it.
 **Sign-in endpoint**
 
 - [x] Add settings for the issuer URL, client ID, client secret and redirect URIs, with the
-      secret kept in `scripts/.env`.
+      secret kept in `.env`.
 - [x] Add `POST /_console/v1/session`, which takes the code, PKCE verifier, nonce and
       redirect URI.
 - [x] Only accept redirect URIs from the configured list.
@@ -235,15 +235,15 @@ These steps change live services, so confirm each one first.
 - [x] Cancel on the consent screen returns to the sign-in page with a note; a `state` that
       isn't ours is refused.
 - [x] The UI reads its settings from `/config.json`, so every setting comes from
-      `scripts/.env` (`LS3_PUBLIC_API_URL` is new). A dev copy's settings file takes only the
-      `LS3_OIDC_*` lines from `scripts/.env`.
+      `.env` (`LS3_PUBLIC_API_URL` is new). A dev copy's settings file takes only the
+      `LS3_OIDC_*` lines from `.env`.
 - [x] An admin-only **Re-link** for users split by a loony-auth reset, by verified email,
       never automatic.
 - [x] An admin **Add Owner** action, and a documented answer for projects whose only Owner
       deleted their Loony account.
 - [ ] Register LS3 in loony-auth: see
       [loony-auth-signin.md](loony-auth-signin.md#registering-ls3-in-loony-auth).
-- [ ] Add the client ID and secret to `scripts/.env`.
+- [x] Add the client ID and secret to `.env`.
 - [ ] Test against the real loony-auth on this machine: sign in, first sign-in creates the
       user, a second sign-in is silent, Cancel on consent, an expired or reused code, a
       wrong `state`, sign-out ends both sessions, a disabled LS3 user is refused, and
