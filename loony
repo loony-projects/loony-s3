@@ -4,7 +4,12 @@
 #   ./loony [--env FILE] <command> [args]
 #
 # Commands:
-#   serve            Run the release server in the foreground, for a service manager.
+#   serve            Run the installed release in the foreground, for a service manager.
+#   deploy           Build, install and switch the live service to a new release.
+#   rollback         Switch the live service back to the previous release.
+#   check            Try the installed release with these settings on throwaway data.
+#   backup           Copy the live data (stops the service for a moment).
+#   backup-timer     Install a systemd timer that runs `backup` every night.
 #   start            Build and start one server in the background (debug build).
 #   stop             Stop the server started by `start`.
 #   restart          stop, then start.
@@ -161,13 +166,15 @@ build_debug() {
 }
 
 # ---------------------------------------------------------------------------
-# serve: the release server in the foreground, for a service manager to supervise.
-# Build it first: cargo build --release --bin loony-server
+# serve / deploy / rollback: the live server runs an installed release, never the build
+# output, so building can't change what's live. Releases live in
+# INSTALL_DIR/releases/<time>-<commit>/ (loony-server and ui/), with INSTALL_DIR/current
+# and INSTALL_DIR/previous pointing at the one in use and the one before. Point
+# LS3_UI_DIR at INSTALL_DIR/current/ui to serve the installed UI.
 # ---------------------------------------------------------------------------
 
-cmd_serve() {
-  load_settings
-  require_env ACCESS_KEY SECRET_KEY DATA_DIR BIND_ADDR REGION
+# Exports what the server needs from the settings: every LS3_* line, plus these.
+export_server_settings() {
   export_ls3_settings
   export LS3_MODE=standalone
   export LS3_DATA_DIR="$DATA_DIR"
@@ -175,7 +182,223 @@ cmd_serve() {
   export LS3_REGION="$REGION"
   export LS3_ROOT_ACCESS_KEY="$ACCESS_KEY"
   export LS3_ROOT_SECRET_KEY="$SECRET_KEY"
-  exec "$REPO_ROOT/target/release/loony-server" --mode standalone
+}
+
+cmd_serve() {
+  load_settings
+  require_env ACCESS_KEY SECRET_KEY DATA_DIR BIND_ADDR REGION INSTALL_DIR
+  export_server_settings
+  local bin="$INSTALL_DIR/current/loony-server"
+  [[ -x "$bin" ]] || die "$bin doesn't exist: install a release with ./loony deploy"
+  exec "$bin" --mode standalone
+}
+
+# Asks the OS for a free loopback port.
+free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+# Starts a release on throwaway data and spare ports with the live settings, and checks it
+# comes up. Usage: dry_run <release dir>
+dry_run() {
+  local release="$1" scratch api ui admin pid ok=1
+  scratch="$(mktemp -d)"
+  api="127.0.0.1:$(free_port)"
+  admin="127.0.0.1:$(free_port)"
+  ui="127.0.0.1:$(free_port)"
+  (
+    export_server_settings
+    export LS3_DATA_DIR="$scratch/data" LS3_BIND_ADDR="$api" LS3_ADMIN_ADDR="$admin"
+    if [[ -n "${LS3_UI_DIR:-}" ]]; then
+      export LS3_UI_DIR="$release/ui" LS3_UI_ADDR="$ui"
+    fi
+    exec "$release/loony-server" --mode standalone
+  ) >"$scratch/log" 2>&1 &
+  pid=$!
+  wait_for_port 127.0.0.1 "${api##*:}" || ok=0
+  if [[ "$ok" -eq 1 && -n "${LS3_UI_DIR:-}" ]]; then
+    curl -sf -o /dev/null "http://$ui/config.json" || ok=0
+  fi
+  kill -0 "$pid" 2>/dev/null || ok=0
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  if [[ "$ok" -ne 1 ]]; then
+    tail -20 "$scratch/log" >&2
+    rm -rf "$scratch"
+    return 1
+  fi
+  rm -rf "$scratch"
+}
+
+# Waits for the live service to be running and answering. The API answers an unsigned
+# request with 403, which is fine: any HTTP answer means it's up.
+healthy() {
+  local code
+  for _ in $(seq 1 30); do
+    if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://$BIND_ADDR/" || true)"
+      if [[ "$code" != "000" ]]; then
+        if [[ -z "${LS3_UI_ADDR:-}" ]] || curl -sf -o /dev/null --max-time 2 "http://$LS3_UI_ADDR/config.json"; then
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# Points `current` at a release and `previous` at what was current. Usage: switch_to <dir>
+switch_to() {
+  local target="$1" old
+  old="$(readlink -f "$INSTALL_DIR/current" 2>/dev/null || true)"
+  ln -sfn "$target" "$INSTALL_DIR/current.new" && mv -T "$INSTALL_DIR/current.new" "$INSTALL_DIR/current"
+  if [[ -n "$old" && "$old" != "$(readlink -f "$target")" ]]; then
+    ln -sfn "$old" "$INSTALL_DIR/previous.new" && mv -T "$INSTALL_DIR/previous.new" "$INSTALL_DIR/previous"
+  fi
+}
+
+require_live_settings() {
+  load_settings
+  require_env ACCESS_KEY SECRET_KEY DATA_DIR BIND_ADDR REGION INSTALL_DIR SERVICE_NAME \
+    BACKUP_DIR BACKUP_KEEP RELEASES_KEEP
+}
+
+cmd_deploy() {
+  require_live_settings
+  local stamp commit release
+  commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]] || commit="$commit-dirty"
+  stamp="$(date +%Y%m%d-%H%M%S)-$commit"
+  release="$INSTALL_DIR/releases/$stamp"
+
+  echo "building the server..."
+  (cd "$REPO_ROOT" && cargo build --release --bin loony-server 2>&1 | tail -2)
+  echo "building the web UI..."
+  (cd "$REPO_ROOT/frontend" && { [[ -d node_modules ]] || npm install; } && npx vite build >/dev/null)
+
+  mkdir -p "$release"
+  install -m 755 "$REPO_ROOT/target/release/loony-server" "$release/loony-server"
+  cp -r "$REPO_ROOT/frontend/dist" "$release/ui"
+  echo "installed $release"
+
+  echo "trying it on throwaway data..."
+  dry_run "$release" || die "the new release didn't start with these settings; nothing live changed. It's left in $release"
+
+  backup_data "before deploying $stamp"
+  switch_to "$release"
+  echo "restarting $SERVICE_NAME on $stamp..."
+  systemctl --user restart "$SERVICE_NAME"
+  if healthy; then
+    echo "deployed $stamp"
+    prune_releases
+    return 0
+  fi
+
+  echo "the new release isn't healthy; switching back..." >&2
+  journalctl --user -u "$SERVICE_NAME" --since "-2min" --no-pager -o cat | tail -20 >&2 || true
+  switch_to "$(readlink -f "$INSTALL_DIR/previous")"
+  systemctl --user restart "$SERVICE_NAME"
+  if healthy; then
+    die "rolled back to $(basename "$(readlink -f "$INSTALL_DIR/current")"). If the new release changed the data, restore the backup in $BACKUP_DIR."
+  fi
+  die "rolling back didn't help either: $SERVICE_NAME isn't healthy. See journalctl --user -u $SERVICE_NAME"
+}
+
+cmd_check() {
+  require_live_settings
+  local release
+  release="$(readlink -f "$INSTALL_DIR/current")"
+  [[ -x "$release/loony-server" ]] || die "no release is installed in $INSTALL_DIR"
+  dry_run "$release" || die "$(basename "$release") doesn't start with these settings"
+  echo "$(basename "$release") starts with these settings"
+}
+
+cmd_rollback() {
+  require_live_settings
+  [[ -L "$INSTALL_DIR/previous" ]] || die "there's no previous release to go back to"
+  local target
+  target="$(readlink -f "$INSTALL_DIR/previous")"
+  switch_to "$target"
+  echo "restarting $SERVICE_NAME on $(basename "$target")..."
+  systemctl --user restart "$SERVICE_NAME"
+  healthy || die "$SERVICE_NAME isn't healthy after rolling back. See journalctl --user -u $SERVICE_NAME"
+  echo "rolled back to $(basename "$target")"
+}
+
+# Keeps the newest RELEASES_KEEP releases, and never removes current or previous.
+prune_releases() {
+  local keep current previous dir
+  current="$(readlink -f "$INSTALL_DIR/current")"
+  previous="$(readlink -f "$INSTALL_DIR/previous" 2>/dev/null || true)"
+  keep=0
+  while IFS= read -r dir; do
+    keep=$((keep + 1))
+    [[ "$keep" -le "$RELEASES_KEEP" || "$dir" == "$current" || "$dir" == "$previous" ]] && continue
+    rm -rf "$dir"
+  done < <(find "$INSTALL_DIR/releases" -mindepth 1 -maxdepth 1 -type d | sort -r)
+}
+
+# ---------------------------------------------------------------------------
+# backup: the server is stopped while its data is copied, so the copy is consistent, and
+# started again whatever happens. Keeps the newest BACKUP_KEEP copies in BACKUP_DIR.
+# ---------------------------------------------------------------------------
+
+backup_data() {
+  local why="$1" target
+  target="$BACKUP_DIR/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
+  echo "backing up $DATA_DIR to $target ($why)..."
+  systemctl --user stop "$SERVICE_NAME"
+  if ! cp -a "$DATA_DIR" "$target"; then
+    rm -rf "$target"
+    systemctl --user start "$SERVICE_NAME"
+    die "the backup failed; $SERVICE_NAME was started again"
+  fi
+  systemctl --user start "$SERVICE_NAME"
+  healthy || die "$SERVICE_NAME isn't healthy after the backup. See journalctl --user -u $SERVICE_NAME"
+  local count=0 dir
+  while IFS= read -r dir; do
+    count=$((count + 1))
+    [[ "$count" -le "$BACKUP_KEEP" ]] || rm -rf "$dir"
+  done < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d | sort -r)
+  echo "backed up to $target"
+}
+
+cmd_backup() {
+  require_live_settings
+  backup_data "${1:-by hand}"
+}
+
+# Installs loony-s3-backup.timer, which runs `./loony backup` at BACKUP_AT every day.
+cmd_backup_timer() {
+  require_live_settings
+  require_env BACKUP_AT
+  local units="$HOME/.config/systemd/user"
+  mkdir -p "$units"
+  cat >"$units/loony-s3-backup.service" <<EOF
+[Unit]
+Description=Back up loony-s3's data (stops $SERVICE_NAME for a moment)
+
+[Service]
+Type=oneshot
+ExecStart=$REPO_ROOT/loony --env $DOTENV_FILE backup nightly
+EOF
+  cat >"$units/loony-s3-backup.timer" <<EOF
+[Unit]
+Description=Back up loony-s3's data every day at $BACKUP_AT
+
+[Timer]
+OnCalendar=*-*-* $BACKUP_AT
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable --now loony-s3-backup.timer
+  systemctl --user list-timers loony-s3-backup.timer --no-pager | head -2
 }
 
 # ---------------------------------------------------------------------------
@@ -593,6 +816,11 @@ command="${1:-help}"
 shift || true
 case "$command" in
   serve) cmd_serve ;;
+  deploy) cmd_deploy ;;
+  rollback) cmd_rollback ;;
+  check) cmd_check ;;
+  backup) cmd_backup "$@" ;;
+  backup-timer) cmd_backup_timer ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
